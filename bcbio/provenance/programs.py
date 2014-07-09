@@ -33,7 +33,8 @@ _cl_progs = [{"cmd": "bamtofastq", "name": "biobambam",
              {"cmd": "qualimap", "args": "-h", "stdout_flag": "QualiMap"},
              {"cmd": "tophat", "args": "--version", "stdout_flag": "TopHat"},
              {"cmd": "vcflib", "has_cl_version": False},
-             {"cmd": "featurecounts", "args": "-v", "stdout_flag": "featureCounts"}]
+             {"cmd": "featurecounts", "args": "-v", "stdout_flag": "featureCounts"},
+             {"cmd": "kraken", "args": "-v", "stdout_flag": "kraken"}]
 
 def _broad_versioner(type):
     def get_version(config):
