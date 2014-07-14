@@ -99,8 +99,8 @@ def _run_qc_tools(bam_file, data):
             cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
             metrics.update(cur_metrics)
     ratio = bam.get_aligned_reads(bam_file,data)
-    if ratio < 0.60 and data['config']["algorithm"].get("kraken", False):
-        cur_metrics =_run_kraken(data,ratio)
+    if ratio < 0.60 and data['config']["algorithm"].get("kraken", True):
+        cur_metrics =_run_kraken(data, ratio)
         metrics.update(cur_metrics)
     metrics["Name"] = data["name"][-1]
     metrics["Quality format"] = utils.get_in(data,
@@ -264,15 +264,20 @@ def _run_gene_coverage(bam_file, data, out_dir):
 
 def _run_kraken(data,ratio):
     """Run kraken, generating report in specified directory and parsing metrics.
-
     Using only first paired reads.
     """
     logger.info("Number of aligned reads < than 0.60 in %s: %s" % (str(data["name"]),ratio))
-    logger.info("Running kraken to determine contaminatn: %s" % str(data["name"]))
+    logger.info("Running kraken to determine contaminant: %s" % str(data["name"]))
     qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
     kraken_out = os.path.join(qc_dir, "kraken")
     stats = out = out_stats = None
-    if not os.path.exists(os.path.join(kraken_out,"kraken_out")):
+    if not data['config']["algorithm"].get("kraken_db", False):
+        logger.info("kraken: no database selected, skipping")
+        return {"kraken_report" : "null"}
+    elif not os.path.exists(data["config"]['algorithm']['kraken_db']):
+        logger.info("kraken: database doesn't exists: %s" % data["config"]['algorithm']['kraken_db'] )
+        return {"kraken_report" : "null"}
+    elif not os.path.exists(os.path.join(kraken_out,"kraken_out")):
         work_dir = os.path.dirname(kraken_out)
         utils.safe_makedir(work_dir)
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
@@ -286,7 +291,6 @@ def _run_kraken(data,ratio):
                       "--preload","--min-hits","3","--threads",str(num_cores), 
                       "--out","-","--classified-out", out, files[0]," 2>",out_stats])
                 do.run(cl,"kraken: %s" % data["name"][-1])
-                #do.run(cl, "kraken: %s" % data["name"][-1])
                 if os.path.exists(kraken_out):
                     shutil.rmtree(kraken_out)
                 shutil.move(tx_tmp_dir, kraken_out)
@@ -297,17 +301,16 @@ def _parse_kraken_output(out_dir, data):
     """Parse kraken stat info comming from stderr, 
        generating report with kraken-report
     """
-
     in_file = os.path.join(out_dir,"kraken_out")
     stat_file = os.path.join(out_dir,"kraken_stats")
     out_file = os.path.join(out_dir, "kraken_summary")
     classify = unclassify = None
     with open(stat_file,'r') as handle:
         for line in handle:
-            if line.find(" classified"):
-                classify = line.strip()
-            if line.find(" unclassified"): 
-                unclassify = line.strip() 
+            if line.find(" classified") > -1:
+                classify = line[line.find("(")+1:line.find(")")]
+            if line.find(" unclassified") > -1:
+                unclassify = line[line.find("(")+1:line.find(")")]
     if os.path.getsize(in_file)>0:
         with file_transaction(out_file) as tx_out_file:
             cl = [config_utils.get_program("kraken", data["config"]),
