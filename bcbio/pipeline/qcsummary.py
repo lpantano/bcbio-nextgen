@@ -47,7 +47,7 @@ def pipeline_summary(data):
     """Provide summary information on processing sample.
     """
     work_bam = data.get("work_bam")
-    if data["sam_ref"] is not None and work_bam and work_bam.endswith(".bam"):
+    if data["sam_ref"] is not None and work_bam and work_bam.endswith(".bam") and has_aligned_reads(work_bam):
         logger.info("Generating summary files: %s" % str(data["name"]))
         data["summary"] = _run_qc_tools(work_bam, data)
     return [[data]]
@@ -77,30 +77,22 @@ def prep_pdf(qc_dir, config):
         return out_file
 
 def _run_qc_tools(bam_file, data):
-    metrics = {}
     """Run a set of third party quality control tools, returning QC directory and metrics.
     """
     to_run = [("fastqc", _run_fastqc)]
-    if data["analysis"].lower() == "rna-seq":
+    if data["analysis"].lower().startswith("rna-seq"):
         to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
+#        to_run.append(("coverage", _run_gene_coverage))
+        to_run.append(("complexity", _run_complexity))
+    elif data["analysis"].lower().startswith("chip-seq"):
+        to_run.append(["bamtools", _run_bamtools_stats])
+    else:
+        to_run += [("bamtools", _run_bamtools_stats), ("gemini", _run_gemini_stats)]
     qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
-    if has_aligned_reads(bam_file):
-        to_run = [("fastqc", _run_fastqc)]
-        if data["analysis"].lower() == "rna-seq":
-            to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
-            #to_run.append(("coverage", _run_gene_coverage))
-            to_run.append(("complexity", _run_complexity))
-        elif data["analysis"].lower() == "chip-seq":
-            to_run.append(["bamtools", _run_bamtools_stats])
-        else:
-            to_run += [("bamtools", _run_bamtools_stats), ("gemini", _run_gemini_stats)]
-        for program_name, qc_fn in to_run:
-            cur_qc_dir = os.path.join(qc_dir, program_name)
-            cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
-            metrics.update(cur_metrics)
-    ratio = bam.get_aligned_reads(bam_file,data)
-    if ratio < 0.60 and data['config']["algorithm"].get("kraken", True):
-        cur_metrics =_run_kraken(data, ratio)
+    metrics = {}
+    for program_name, qc_fn in to_run:
+        cur_qc_dir = os.path.join(qc_dir, program_name)
+        cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
         metrics.update(cur_metrics)
     metrics["Name"] = data["name"][-1]
     metrics["Quality format"] = utils.get_in(data,
@@ -136,7 +128,6 @@ def write_project_summary(samples):
         yaml.safe_dump({"samples": prev_samples + [_save_fields(sample[0]) for sample in samples]}, out_handle,
                        default_flow_style=False, allow_unicode=False)
     return out_file
-
 
 def _other_pipeline_samples(summary_file, cur_samples):
     """Retrieve samples produced previously by another pipeline in the summary output.
@@ -260,64 +251,6 @@ def _run_gene_coverage(bam_file, data, out_dir):
         plot_gene_coverage(bam_file, ref_file, count_file, tx_out_file)
     return {"gene_coverage": out_file}
 
-
-
-def _run_kraken(data,ratio):
-    """Run kraken, generating report in specified directory and parsing metrics.
-    Using only first paired reads.
-    """
-    logger.info("Number of aligned reads < than 0.60 in %s: %s" % (str(data["name"]),ratio))
-    logger.info("Running kraken to determine contaminant: %s" % str(data["name"]))
-    qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
-    kraken_out = os.path.join(qc_dir, "kraken")
-    stats = out = out_stats = None
-    if not data['config']["algorithm"].get("kraken_db", False):
-        logger.info("kraken: no database selected, skipping")
-        return {"kraken_report" : "null"}
-    elif not os.path.exists(data["config"]['algorithm']['kraken_db']):
-        logger.info("kraken: database doesn't exists: %s" % data["config"]['algorithm']['kraken_db'] )
-        return {"kraken_report" : "null"}
-    elif not os.path.exists(os.path.join(kraken_out,"kraken_out")):
-        work_dir = os.path.dirname(kraken_out)
-        utils.safe_makedir(work_dir)
-        num_cores = data["config"]["algorithm"].get("num_cores", 1)
-        files = data["files"]        
-        with utils.curdir_tmpdir(data, work_dir) as tx_tmp_dir:
-            with utils.chdir(tx_tmp_dir):
-                out = os.path.join(tx_tmp_dir,"kraken_out")
-                out_stats = os.path.join(tx_tmp_dir,"kraken_stats")
-                cl = (" ").join([config_utils.get_program("kraken", data["config"]),
-                      "--db",data["config"]['algorithm']['kraken_db'],"--quick",
-                      "--preload","--min-hits","3","--threads",str(num_cores), 
-                      "--out","-","--classified-out", out, files[0]," 2>",out_stats])
-                do.run(cl,"kraken: %s" % data["name"][-1])
-                if os.path.exists(kraken_out):
-                    shutil.rmtree(kraken_out)
-                shutil.move(tx_tmp_dir, kraken_out)
-    metrics = _parse_kraken_output(kraken_out,data)
-    return metrics
-
-def _parse_kraken_output(out_dir, data):
-    """Parse kraken stat info comming from stderr, 
-       generating report with kraken-report
-    """
-    in_file = os.path.join(out_dir,"kraken_out")
-    stat_file = os.path.join(out_dir,"kraken_stats")
-    out_file = os.path.join(out_dir, "kraken_summary")
-    classify = unclassify = None
-    with open(stat_file,'r') as handle:
-        for line in handle:
-            if line.find(" classified") > -1:
-                classify = line[line.find("(")+1:line.find(")")]
-            if line.find(" unclassified") > -1:
-                unclassify = line[line.find("(")+1:line.find(")")]
-    if os.path.getsize(in_file)>0:
-        with file_transaction(out_file) as tx_out_file:
-            cl = [config_utils.get_program("kraken", data["config"]),
-                          "--db",data["config"]['algorithm']['kraken_db'],                       
-                           in_file,">",tx_out_file]
-            do.run(cl, "kraken report: %s" % data["name"][-1])
-    return {"kraken_report" : out_file,"kraken_clas": classify,"kraken_unclas": unclassify}
 
 def _run_fastqc(bam_file, data, fastqc_out):
     """Run fastqc, generating report in specified directory and parsing metrics.
