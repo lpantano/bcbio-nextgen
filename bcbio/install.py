@@ -401,12 +401,11 @@ def _install_kraken_db( fname,datadir,args):
             utils.safe_makedir(kraken)
         if not os.path.exists(db):
             if not os.path.exists(compress):
-                subprocess.check_call(["wget", "-O", compress,url, "--no-check-certificate"])
-            else:
-                cmd = ["tar","-xzvf",compress,"-C",kraken]
-                subprocess.check_call(cmd)
-                shutil.move(os.path.join(kraken,"minikraken_20140330"),os.path.join(kraken,"minikraken"))
-                utils.remove_safe(compress)
+                subprocess.check_call(["wget", "-O", compress,url, "--no-check-certificate"])          
+            cmd = ["tar","-xzvf",compress,"-C",kraken]
+            subprocess.check_call(cmd)
+            shutil.move(os.path.join(kraken,"minikraken_20140330"),os.path.join(kraken,"minikraken"))
+            utils.remove_safe(compress)
     else:
         raise argparse.ArgumentTypeError("kraken not installed in tooldir %s." %
             os.path.join(tooldir,"bin","kraken"))
@@ -494,7 +493,11 @@ def get_defaults():
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
     """
+<<<<<<< HEAD
     std_choices = set(["data", "cadd", "dbnsfp","kraken"])
+=======
+    std_choices = set(["data", "cadd", "dbnsfp", "kraken"])
+>>>>>>> upstream/master
     if x in std_choices:
         return Tool(x, None)
     elif "=" in x and len(x.split("=")) == 2:
