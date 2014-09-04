@@ -8,6 +8,7 @@ import toolz as tz
 from bcbio import log, utils
 from bcbio.upload import shared, filesystem, galaxy, s3
 from bcbio.pipeline import run_info
+import bcbio.pipeline.datadict as dd
 
 _approaches = {"filesystem": filesystem,
                "galaxy": galaxy,
@@ -128,10 +129,13 @@ def _maybe_add_sv(algorithm, sample, out):
                             "ext": "%s-sample" % svcall["variantcaller"],
                             "variantcaller": svcall["variantcaller"]})
             if "validate" in svcall:
-                out.append({"path": svcall["validate"],
-                            "type": "csv",
-                            "ext": "%s-validate" % svcall["variantcaller"],
-                            "variantcaller": svcall["variantcaller"]})
+                for vkey, vext in [("csv", "csv"), ("plot", "pdf")]:
+                    vfile = tz.get_in(["validate", vkey], svcall)
+                    if vfile:
+                        out.append({"path": vfile,
+                                    "type": vext,
+                                    "ext": "%s-validate" % svcall["variantcaller"],
+                                    "variantcaller": svcall["variantcaller"]})
     return out
 
 def _get_variant_file(x, key):
@@ -245,6 +249,10 @@ def _get_files_project(sample, upload_config):
 
     if "summary" in sample and sample["summary"].get("project"):
         out.append({"path": sample["summary"]["project"]})
+    mixup_check = tz.get_in(["summary", "mixup_check"], sample)
+    if mixup_check:
+        out.append({"path": sample["summary"]["mixup_check"],
+                    "type": "directory", "ext": "mixup_check"})
 
     for x in sample.get("variants", []):
         if "pop_db" in x:
@@ -274,5 +282,7 @@ def _get_files_project(sample, upload_config):
         out.append({"path": sample["combined_fpkm_isoform"]})
     if "assembled_gtf" in sample:
         out.append({"path": sample["assembled_gtf"]})
+    if dd.get_dexseq_counts(sample):
+        out.append({"path": dd.get_dexseq_counts(sample)})
 
     return _add_meta(out, config=upload_config)

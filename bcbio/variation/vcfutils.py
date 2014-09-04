@@ -61,6 +61,14 @@ def get_paired_phenotype(data):
 
 # ## General utilities
 
+def fix_ambiguous_cl():
+    """awk command to replace non-N ambiguous REF bases with N.
+
+    Some callers include these if present in the reference genome but GATK does
+    not like them.
+    """
+    return r"""awk -F$'\t' -v OFS='\t' '{if ($0 !~ /^#/) gsub(/[KMRYSWBVHDX]/, "N", $4) } {print}'"""
+
 def write_empty_vcf(out_file, config=None, samples=None):
     needs_bgzip = False
     if out_file.endswith(".vcf.gz"):
@@ -115,7 +123,7 @@ def _get_exclude_samples(in_file, to_exclude):
             include.append(s)
     return include, exclude
 
-def exclude_samples(in_file, out_file, to_exclude, ref_file, config):
+def exclude_samples(in_file, out_file, to_exclude, ref_file, config, filters=None):
     """Exclude specific samples from an input VCF file.
     """
     include, exclude = _get_exclude_samples(in_file, to_exclude)
@@ -127,11 +135,12 @@ def exclude_samples(in_file, out_file, to_exclude, ref_file, config):
             bcftools = config_utils.get_program("bcftools", config)
             output_type = "z" if out_file.endswith(".gz") else "v"
             include_str = ",".join(include)
-            cmd = "{bcftools} view -O {output_type} -s {include_str} {in_file} > {tx_out_file}"
+            filter_str = "-f %s" % filters if filters is not None else ""  # filters could be e.g. 'PASS,.'
+            cmd = "{bcftools} view -O {output_type} -s {include_str} {filter_str} {in_file} > {tx_out_file}"
             do.run(cmd.format(**locals()), "Exclude samples: {}".format(to_exclude))
     return out_file
 
-def select_sample(in_file, sample, out_file, config):
+def select_sample(in_file, sample, out_file, config, filters=None):
     """Select a single sample from the supplied multisample VCF file.
     """
     if not utils.file_exists(out_file):
@@ -140,7 +149,8 @@ def select_sample(in_file, sample, out_file, config):
                 bgzip_and_index(in_file, config)
             bcftools = config_utils.get_program("bcftools", config)
             output_type = "z" if out_file.endswith(".gz") else "v"
-            cmd = "{bcftools} view -O {output_type} {in_file} -s {sample} > {tx_out_file}"
+            filter_str = "-f %s" % filters if filters is not None else ""  # filters could be e.g. 'PASS,.'
+            cmd = "{bcftools} view -O {output_type} {filter_str} {in_file} -s {sample} > {tx_out_file}"
             do.run(cmd.format(**locals()), "Select sample: %s" % sample)
     if out_file.endswith(".gz"):
         bgzip_and_index(out_file, config)
@@ -212,6 +222,7 @@ def _sort_by_region(fnames, regions, ref_file, config):
     for i, sq in enumerate(ref.file_contigs(ref_file, config)):
         contig_order[sq.name] = i
     sitems = []
+    assert len(regions) == len(fnames), (regions, fnames)
     for region, fname in zip(regions, fnames):
         if isinstance(region, (list, tuple)):
             c, s, e = region
@@ -228,32 +239,50 @@ def concat_variant_files(orig_files, out_file, regions, ref_file, config):
     Lightweight approach to merging VCF files split by regions with the same
     sample information, so no complex merging needed. Handles both plain text
     and bgzipped/tabix indexed outputs.
+
+    Falls back to bcftools concat if fails due to GATK stringency issues.
+    """
+    if not utils.file_exists(out_file):
+        sorted_files = _sort_by_region(orig_files, regions, ref_file, config)
+        exist_files = [x for x in sorted_files if os.path.exists(x)]
+        ready_files = run_multicore(p_bgzip_and_index, [[x, config] for x in exist_files], config)
+        input_file_list = "%s-files.list" % utils.splitext_plus(out_file)[0]
+        with open(input_file_list, "w") as out_handle:
+            for fname in ready_files:
+                out_handle.write(fname + "\n")
+        failed = False
+        with file_transaction(out_file) as tx_out_file:
+            params = ["org.broadinstitute.gatk.tools.CatVariants",
+                      "-R", ref_file,
+                      "-V", input_file_list,
+                      "-out", tx_out_file,
+                      "-assumeSorted"]
+            jvm_opts = broad.get_gatk_framework_opts(config, include_gatk=False)
+            cmd = [config_utils.get_program("gatk-framework", config)] + params + jvm_opts
+            try:
+                do.run(cmd, "Concat variant files", log_error=False)
+            except subprocess.CalledProcessError, msg:
+                if ("We require all VCFs to have complete VCF headers" in str(msg) or
+                      "Features added out of order" in str(msg)):
+                    os.remove(tx_out_file)
+                    failed = True
+                else:
+                    raise
+        if failed:
+            return concat_variant_files_bcftools(input_file_list, out_file, ref_file, config)
+    if out_file.endswith(".gz"):
+        bgzip_and_index(out_file, config)
+    return out_file
+
+def concat_variant_files_bcftools(in_list, out_file, ref_file, config):
+    """Concatenate variant files using bcftools concat.
     """
     if not utils.file_exists(out_file):
         with file_transaction(out_file) as tx_out_file:
-            sorted_files = _sort_by_region(orig_files, regions, ref_file, config)
-            filtered_files = [x for x in sorted_files if vcf_has_variants(x)]
-            if len(filtered_files) > 0 and filtered_files[0].endswith(".gz"):
-                filtered_files = run_multicore(p_bgzip_and_index, [[x, config] for x in filtered_files], config)
-            input_vcf_file = "%s-files.txt" % utils.splitext_plus(out_file)[0]
-            with open(input_vcf_file, "w") as out_handle:
-                for fname in filtered_files:
-                    out_handle.write(fname + "\n")
-            if len(filtered_files) > 0:
-                compress_str = "| bgzip -c " if out_file.endswith(".gz") else ""
-                cmd = "vcfcat `cat {input_vcf_file}` {compress_str} > {tx_out_file}"
-                do.run(cmd.format(**locals()), "Concatenate variants")
-            else:
-                # try to rescue sample names from individual vcf files
-                my_samples = None
-                for vrn_file in sorted_files:
-                    if vrn_file.endswith(".gz"):
-                        tabix_index(vrn_file, config)
-                    my_reader = vcf.Reader(filename=vrn_file)
-                    if len(my_reader.samples) > 0:
-                        my_samples = my_reader.samples[:]
-                        break
-                write_empty_vcf(tx_out_file, None, my_samples)
+            bcftools = config_utils.get_program("bcftools", config)
+            output_type = "z" if out_file.endswith(".gz") else "v"
+            cmd = "{bcftools} concat --allow-overlaps -O {output_type} --file-list {in_list} -o {tx_out_file}"
+            do.run(cmd.format(**locals()), "bcftools concat variants")
     if out_file.endswith(".gz"):
         bgzip_and_index(out_file, config)
     return out_file
@@ -272,7 +301,8 @@ def combine_variant_files(orig_files, out_file, ref_file, config,
         orig_files = orig_files[file_key]
     if not utils.file_exists(out_file):
         with file_transaction(out_file) as tx_out_file:
-            ready_files = run_multicore(p_bgzip_and_index, [[x, config] for x in orig_files], config)
+            exist_files = [x for x in orig_files if os.path.exists(x)]
+            ready_files = run_multicore(p_bgzip_and_index, [[x, config] for x in exist_files], config)
             params = ["-T", "CombineVariants",
                       "-R", ref_file,
                       "--out", tx_out_file]
@@ -348,7 +378,7 @@ def move_vcf(orig_file, new_file):
         if os.path.exists(to_move):
             shutil.move(to_move, new_file + ext)
 
-def bgzip_and_index(in_file, config, remove_orig=True):
+def bgzip_and_index(in_file, config, remove_orig=True, prep_cmd=""):
     """bgzip and tabix index an input file, handling VCF and BED.
     """
     out_file = in_file if in_file.endswith(".gz") else in_file + ".gz"
@@ -356,7 +386,10 @@ def bgzip_and_index(in_file, config, remove_orig=True):
         assert not in_file == out_file, "Input file is bgzipped but not found: %s" % in_file
         with file_transaction(out_file) as tx_out_file:
             bgzip = tools.get_bgzip_cmd(config)
-            cmd = "{bgzip} -c {in_file} > {tx_out_file}"
+            if prep_cmd:
+                cmd = "cat {in_file} | {prep_cmd} | {bgzip} -c > {tx_out_file}"
+            else:
+                cmd = "{bgzip} -c {in_file} > {tx_out_file}"
             try:
                 do.run(cmd.format(**locals()), "bgzip %s" % os.path.basename(in_file))
             except subprocess.CalledProcessError:

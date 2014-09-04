@@ -24,6 +24,20 @@ except ImportError:
     except ImportError:
         futures = None
 
+SUPPORTED_REMOTES = ("s3://",)
+
+def remote_cl_input(fname):
+    """Return command line input for a file, handling streaming remote cases.
+    """
+    if not fname:
+        return fname
+    elif fname.startswith("s3://"):
+        bucket, key = fname.split("//")[-1].split("/", 1)
+        gunzip = "| gunzip -c" if fname.endswith(".gz") else ""
+        return "<(gof3r get --no-md5 -k {key} -b {bucket} {gunzip})".format(**locals())
+    else:
+        return fname
+
 @contextlib.contextmanager
 def cpmap(cores=1):
     """Configurable parallel map context manager.
@@ -211,6 +225,14 @@ def tmpfile(*args, **kwargs):
         if os.path.exists(fname):
             os.remove(fname)
 
+def file_exists_or_remote(fname):
+    """Check if a file exists or is accessible remotely.
+    """
+    if fname.startswith(SUPPORTED_REMOTES):
+        return True
+    else:
+        return file_exists(fname)
+
 def file_exists(fname):
     """Check if a file exists and is non-empty.
     """
@@ -271,6 +293,17 @@ def remove_safe(f):
         os.remove(f)
     except OSError:
         pass
+
+def file_plus_index(fname):
+    """Convert a file name into the file plus required indexes.
+    """
+    exts = {".vcf": ".idx", ".bam": ".bai", ".vcf.gz": ".tbi", ".bed.gz": ".tbi",
+            ".fq.gz": ".gbi"}
+    ext = splitext_plus(fname)[-1]
+    if ext in exts:
+        return [fname, fname + exts[ext]]
+    else:
+        return [fname]
 
 def symlink_plus(orig, new):
     """Create relative symlinks and handle associated biological index files.
@@ -370,6 +403,25 @@ def merge_config_files(fnames):
                 out[k] = v
     return out
 
+def deepish_copy(org):
+    """Improved speed deep copy for dictionaries of simple python types.
+
+    Thanks to Gregg Lind:
+    http://writeonly.wordpress.com/2009/05/07/deepcopy-is-a-pig-for-simple-data/
+    """
+    out = dict().fromkeys(org)
+    for k, v in org.iteritems():
+        if isinstance(v, dict):
+            out[k] = deepish_copy(v)
+        else:
+            try:
+                out[k] = v.copy()   # dicts, sets
+            except AttributeError:
+                try:
+                    out[k] = v[:]   # lists, tuples, strings, unicode
+                except TypeError:
+                    out[k] = v      # ints
+    return out
 
 def get_in(d, t, default=None):
     """
@@ -550,3 +602,14 @@ def R_package_path(package):
             return dirname
     return None
 
+def is_gzipped(fname):
+    _, ext = os.path.splitext(fname)
+    return ext in [".gz", "gzip"]
+
+def open_possible_gzip(fname, flag="r"):
+    if is_gzipped(fname):
+        if "b" not in flag:
+            flag += "b"
+        return gzip.open(fname, flag)
+    else:
+        return open(fname, flag)

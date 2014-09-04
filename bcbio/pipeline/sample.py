@@ -6,10 +6,12 @@ processed together.
 import copy
 import os
 
+import toolz as tz
+
 from bcbio import utils, bam, broad
 from bcbio.log import logger
 from bcbio.pipeline.merge import merge_bam_files
-from bcbio.bam import callable, fastq
+from bcbio.bam import fastq, callable
 from bcbio.bam.trim import trim_adapters
 from bcbio.ngsalign import postalign
 from bcbio.pipeline.fastq import get_fastq_files
@@ -17,7 +19,7 @@ from bcbio.pipeline.alignment import align_to_sort_bam
 from bcbio.pipeline import cleanbam
 from bcbio.variation import bedutils, recalibrate
 from bcbio.variation import multi as vmulti
-
+import bcbio.pipeline.datadict as dd
 
 def prepare_sample(data):
     """Prepare a sample to be run, potentially converting from BAM to
@@ -49,11 +51,14 @@ def trim_sample(data):
         logger.info("Skipping trimming of %s." % (", ".join(to_trim)))
         return [[data]]
 
+    out_dir = os.path.join(dd.get_work_dir(data), "trimmed")
+    utils.safe_makedir(out_dir)
+
     if trim_reads == "read_through":
         logger.info("Trimming low quality ends and read through adapter "
                     "sequence from %s." % (", ".join(to_trim)))
-        out_files = trim_adapters(to_trim, dirs, config)
-    data["files"] = out_files
+        out_files = trim_adapters(to_trim, out_dir, config)
+        data["files"] = out_files
     return [[data]]
 
 # ## Alignment
@@ -94,7 +99,7 @@ def process_alignment(data):
         fastq1, fastq2 = data["files"][0], None
     config = data["config"]
     aligner = config["algorithm"].get("aligner", None)
-    if fastq1 and os.path.exists(fastq1) and aligner:
+    if fastq1 and utils.file_exists_or_remote(fastq1) and aligner:
         logger.info("Aligning lane %s with %s aligner" % (data["rgnames"]["lane"], aligner))
         data = align_to_sort_bam(fastq1, fastq2, aligner, data)
         data = _add_supplemental_bams(data)
@@ -106,7 +111,7 @@ def process_alignment(data):
                 raise ValueError("Cannot specify `bam_clean: picard` with `bam_sort` other than coordinate: %s"
                                  % sort_method)
             out_bam = cleanbam.picard_prep(fastq1, data["rgnames"], data["sam_ref"], data["dirs"],
-                                           config)
+                                           data)
         elif sort_method:
             runner = broad.runner_from_config(config)
             out_file = os.path.join(data["dirs"]["work"], "{}-sort.bam".format(
@@ -118,7 +123,7 @@ def process_alignment(data):
         bam.check_header(out_bam, data["rgnames"], data["sam_ref"], data["config"])
         dedup_bam = postalign.dedup_bam(out_bam, data)
         data["work_bam"] = dedup_bam
-    elif fastq1 and os.path.exists(fastq1) and fastq1.endswith(".cram"):
+    elif fastq1 and utils.file_exists_or_remote(fastq1) and fastq1.endswith(".cram"):
         data["work_bam"] = fastq1
     elif fastq1 is None and "vrn_file" in data:
         data["config"]["algorithm"]["variantcaller"] = False
@@ -133,7 +138,7 @@ def postprocess_alignment(data):
     Cleans input BED files to avoid issues with overlapping input segments.
     """
     data = bedutils.clean_inputs(data)
-    if vmulti.bam_needs_processing(data):
+    if vmulti.bam_needs_processing(data) and data["work_bam"].endswith(".bam"):
         callable_region_bed, nblock_bed, callable_bed = \
             callable.block_regions(data["work_bam"], data["sam_ref"], data["config"])
         data["regions"] = {"nblock": nblock_bed, "callable": callable_bed}
@@ -142,7 +147,7 @@ def postprocess_alignment(data):
             data["config"]["algorithm"]["variant_regions"] = callable_region_bed
             data = bedutils.clean_inputs(data)
         data = _recal_no_markduplicates(data)
-    return [data]
+    return [[data]]
 
 def _recal_no_markduplicates(data):
     orig_config = copy.deepcopy(data["config"])
@@ -150,6 +155,21 @@ def _recal_no_markduplicates(data):
     data = recalibrate.prep_recal(data)[0][0]
     data["config"] = orig_config
     return data
+
+def _merge_out_from_infiles(in_files):
+    """Generate output merged file name from set of input files.
+
+    Handles non-shared filesystems where we don't know output path when setting
+    up split parts.
+    """
+    fname = os.path.commonprefix([os.path.basename(f) for f in in_files])
+    while fname.endswith(("-", "_", ".")):
+        fname = fname[:-1]
+    ext = os.path.splitext(in_files[0])[-1]
+    dirname = os.path.dirname(in_files[0])
+    while dirname.endswith(("split", "merge")):
+        dirname = os.path.dirname(dirname)
+    return os.path.join(dirname, "%s%s" % (fname, ext))
 
 def delayed_bam_merge(data):
     """Perform a merge on previously prepped files, delayed in processing.
@@ -168,7 +188,7 @@ def delayed_bam_merge(data):
         if file_key in data:
             extras.append(data[file_key])
         in_files = sorted(list(set(extras)))
-        out_file = data["combine"][file_key]["out"]
+        out_file = tz.get_in(["combine", file_key, "out"], data, _merge_out_from_infiles(in_files))
         sup_exts = data.get(file_key + "-plus", {}).keys()
         for ext in sup_exts + [""]:
             merged_file = None

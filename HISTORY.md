@@ -1,5 +1,52 @@
-## 0.8.0 (in progress)
+## 0.8.2 (in progress)
 
+- Fix issues with concatenating files that fail to work with GATK's
+  CatVariants. Fall back to bcftools concat which correctly handles problem
+  headers and overlapping segments.
+- Improve Platypus integration: correctly pass multiple BAM files, make use of
+  assembler, split MNPs, and correctly restrict to variant regions.
+- Be more aggressive with system memory usage to try and make better use of
+  available resources. The hope is to take advantage of Java memory fixes that
+  previously forced us to be conservative.
+
+## 0.8.1 (August 29, 2014)
+- Support joint recalling with GATK HapolotypeCaller, FreeBayes and Platypus. The
+  `jointcaller` configuration variable enables calling concurrently in large
+  populations by independently calling on samples them combining into a final
+  combined callset with no-call/reference calls at any position called
+  independently.
+- Add qsignature tool to standard and variant analyses, which helps identify
+  sample swaps. Add `mixup_check` configuration variant to enable.
+- Fix issue with merging GATK produced VCF files with vcfcat by swapping to
+  GATK's CatVariants. Thanks to Matt De Both.
+- Initial support for ensemble calling on cancer tumor/normal calling. Now
+  available for initial validation work. Thanks to Miika Ahdesmaki.
+- Enable structural variant analyses on shared batches (two tumors with same
+  normal). Thanks to Miika Ahdesmaki.
+- Avoid Java out of memory errors for large numbers of running processes by
+  avoiding Parallel GC collction. Thanks to Justin Johnson and Miika Ahdesmaki.
+- Enable streaming S3 input to RNA-seq and variant processing. BAM and fastq
+  inputs can stream directly into alignment and trimming steps.
+- Speed improvements for re-running samples with large numbers of samples or
+  regions.
+- Improved cluster cleanup by providing better error handling and removal of
+  controllers and engines in additional failure cases.
+- Support variant calling for organisms without dbSNP files. Thanks to Mark Rose.
+- Support the SNAP aligner, which provides improved speed on systems with
+  larger amount of memory (64Gb for human genome alignment).
+- Support the Platypus haplotype based variant caller for germline samples with
+  both batched and joint calling.
+- Fix GATK version detection when `_JAVA_OPTIONS` specified. Thanks to Miika
+  Ahdesmaki.
+- Use msgpack for ipython serialization to reduce message sizes and IPython
+  controller memory instead of homemade json/zlib approach.
+
+## 0.8.0 (July 28, 2014)
+
+- Change defaults for installation: do not use sudo default and require
+  `--sudo` flag for installing system packages. No longer includes default
+  genomes or aligners to enable more minimal installations. Users install
+  genomes by specifically enumerating them on the command line.
 - Add support for Ensembl variant effects predictor (VEP). Enables annotation
   of variants with dbNSFP and LOFTEE. Thanks to Daniel MacArthur for VEP
   suggestion.
@@ -13,12 +60,35 @@
   pybedtools to avoid filling global temporary space.
 - Improve parallel region generation to avoid large numbers of segments on
   organisms with many chromosomes.
+- Initial support for tumor normal calling with VarDict. Thanks to
+  Miika Ahdesmaki and Zhongwu Lai.
 - Provide optional support for compressing messages on large IPython jobs to
   reduce memory usage. Enable by adding `compress_msg` to `alogrithm` section of
-  `bcbio_system.yaml`. Will be made the default after more testing.
+  `bcbio_system.yaml`. There will be additional testing in future releases
+  before making the default, and this may be replaced by new methods like
+  transit (https://github.com/cognitect/transit-python).
 - Add de-duplication support back for pre-aligned input files. Thanks to
   Severine Catreux.
 - Generalize SGE support to handle additional system setups. Thanks to Karl Gutwin.
+- Add reference guided transcriptome assembly with Cufflinks along with functions
+  to classify novel transcripts as protein coding or not as well as generally clean
+  the Cufflinks assembly of low quality transcripts.
+- Developer: provide datadict.py with encapsulation functions for looking up and
+  setting items in the data dictionary.
+- Unit tests fixed. Unit test data moved to external repository:
+  https://github.com/roryk/bcbio-nextgen-test-data
+- Add exon-level counting with DEXseq.
+- Bugfix: Fix for Tophat setting the PI flag as inner-distance-size and not insert size.
+- Added kraken support for contamination detection (@lpatano):
+  http://ccb.jhu.edu/software/kraken/
+- Isoform-level FPKM combined output file generated (@klrl262)
+- Use shared conda repository for tricky to install Python packages:
+  https://github.com/chapmanb/bcbio-conda
+- Added initial chanjo integration for coverage calculation (@kern3020):
+  https://github.com/robinandeer/chanjo
+- Initial support for automated evaluation of structural variant calling.
+- Bugfix: set library-type properly for Cufflinks runs.
+- Added `genome_setup.py` a script to prepare your own genome and rnaseq files.
 
 ## 0.7.9 (May 19, 2014)
 

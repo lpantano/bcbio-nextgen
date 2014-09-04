@@ -19,11 +19,11 @@ except ImportError:
 import pysam
 import toolz as tz
 
-from bcbio import utils
+from bcbio import broad, utils
 from bcbio.distributed.split import grouped_parallel_split_combine
 from bcbio.pipeline import config_utils, region
 from bcbio.provenance import do
-from bcbio.variation import bamprep, multi
+from bcbio.variation import bamprep, gatkjoint, genotype, multi
 
 def _get_callable_regions(data):
     """Retrieve regions to parallelize by from callable regions, variant regions or chromosomes
@@ -49,8 +49,9 @@ def _split_by_callable_region(data):
     splitting aggressively by regions.
     """
     batch = tz.get_in(("metadata", "batch"), data)
+    jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), data)
     name = batch if batch else tz.get_in(("rgnames", "sample"), data)
-    out_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "joint", name))
+    out_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "joint", jointcaller, name))
     utils.safe_makedir(os.path.join(out_dir, "inprep"))
     parts = []
     for feat in _get_callable_regions(data):
@@ -63,17 +64,26 @@ def _split_by_callable_region(data):
     out_file = os.path.join(out_dir, "%s-joint.vcf.gz" % name)
     return out_file, parts
 
+def _is_jointcaller_compatible(data):
+    """Match variant caller inputs to compatible joint callers.
+    """
+    jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), data)
+    variantcaller = tz.get_in(("config", "algorithm", "variantcaller"), data)
+    return jointcaller == "%s-joint" % variantcaller or not variantcaller
+
 def square_off(samples, run_parallel):
     """Perform joint calling at all variants within a batch.
     """
     to_process = []
     extras = []
     for data in [x[0] for x in samples]:
-        jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), data)
-        batch = tz.get_in(("metadata", "batch"), data)
-        if jointcaller and batch:
-            to_process.append([data])
-        else:
+        added = False
+        if tz.get_in(("metadata", "batch"), data):
+            for add in genotype.handle_multiple_callers(data, "jointcaller"):
+                if _is_jointcaller_compatible(add):
+                    added = True
+                    to_process.append([add])
+        if not added:
             extras.append([data])
     processed = grouped_parallel_split_combine(to_process, _split_by_callable_region,
                                                multi.group_batches_joint, run_parallel,
@@ -101,8 +111,10 @@ def square_batch_region(data, region, bam_files, vrn_files, out_file):
     """
     if not utils.file_exists(out_file):
         jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), data)
-        if jointcaller == "bcbio-variation-recall":
+        if jointcaller in ["freebayes-joint", "platypus-joint"]:
             _square_batch_bcbio_variation(data, region, bam_files, vrn_files, out_file)
+        elif jointcaller == "gatk-haplotype-joint":
+            gatkjoint.run_region(data, region, vrn_files, out_file)
         else:
             raise ValueError("Unexpected joint calling approach: %s" % jointcaller)
     if region:
@@ -139,8 +151,9 @@ def _square_batch_bcbio_variation(data, region, bam_files, vrn_files, out_file):
     input_file = "%s-inputs.txt" % os.path.splitext(out_file)[0]
     with open(input_file, "w") as out_handle:
         out_handle.write("\n".join(sorted(list(set(vrn_files))) + sorted(list(set(bam_files)))))
-    cmd = ["bcbio-variation-recall", "square"] + jvm_opts + \
-          ["-c", cores, "-r", bamprep.region_to_gatk(region)] + \
+    variantcaller = tz.get_in(("config", "algorithm", "jointcaller"), data).replace("-joint", "")
+    cmd = ["bcbio-variation-recall", "square"] + jvm_opts + broad.get_default_jvm_opts() + \
+          ["-c", cores, "-r", bamprep.region_to_gatk(region), "--caller", variantcaller] + \
           [out_file, ref_file, input_file]
     do.run(cmd, "Squaring off in region: %s" % bamprep.region_to_gatk(region))
     return out_file

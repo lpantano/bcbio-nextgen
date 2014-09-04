@@ -21,6 +21,7 @@ from bcbio import broad, utils
 from bcbio.pipeline import genome
 from bcbio.variation import effects
 from bcbio.provenance import programs
+from bcbio.distributed.transaction import file_transaction
 
 REMOTES = {
     "requirements": "https://raw.github.com/chapmanb/bcbio-nextgen/master/requirements.txt",
@@ -47,6 +48,8 @@ def upgrade_bcbio(args):
         sudo_cmd = [] if args.upgrade == "stable" else ["sudo"]
         subprocess.check_call(sudo_cmd + [pip_bin, "install", "-r", REMOTES["requirements"]])
         print("Upgrade of bcbio-nextgen code complete.")
+    elif args.upgrade in ["deps"]:
+        _update_conda_packages()
     else:
         _update_conda_packages()
         print("Upgrading bcbio-nextgen to latest development version")
@@ -55,6 +58,11 @@ def upgrade_bcbio(args):
                                "git+%s#egg=bcbio-nextgen" % REMOTES["gitrepo"]])
         print("Upgrade of bcbio-nextgen development code complete.")
 
+    try:
+        _set_matplotlib_default_backend()
+    except OSError:
+        pass
+
     if args.tooldir:
         with bcbio_tmpdir():
             print("Upgrading third party tools to latest versions")
@@ -62,18 +70,52 @@ def upgrade_bcbio(args):
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
     if args.install_data:
-        with bcbio_tmpdir():
-            print("Upgrading bcbio-nextgen data files")
-            upgrade_bcbio_data(args, REMOTES)
-            print("bcbio-nextgen data upgrade complete.")
+        if len(args.genomes) == 0:
+            print("Data not installed, no genomes provided with `--genomes` flag")
+        elif len(args.aligners) == 0:
+            print("Data not installed, no aligners provided with `--aligners` flag")
+        else:
+            with bcbio_tmpdir():
+                print("Upgrading bcbio-nextgen data files")
+                upgrade_bcbio_data(args, REMOTES)
+                print("bcbio-nextgen data upgrade complete.")
     if args.isolate and args.tooldir:
         print("Installation directory not added to current PATH")
-        print("  Add {t}/bin to PATH and {t}/lib to LD_LIBRARY_PATH".format(t=args.tooldir))
+        print(" Add:\n  {t}/bin to PATH\n  {t}/lib to LD_LIBRARY_PATH\n"
+              "  {t}/lib/perl5:{t}/lib/perl5/site_perl to PERL5LIB".format(t=args.tooldir))
     save_install_defaults(args)
     args.datadir = _get_data_dir()
     _install_container_bcbio_system(args.datadir)
     print("Upgrade completed successfully.")
     return args
+
+
+def _set_matplotlib_default_backend():
+    """
+    matplotlib will try to print to a display if it is available, but don't want
+    to run it in interactive mode. we tried setting the backend to 'Agg'' before
+    importing, but it was still resulting in issues. we replace the existing
+    backend with 'agg' in the default matplotlibrc. This is a hack until we can
+    find a better solution
+    """
+    if _matplotlib_installed():
+        import matplotlib
+        matplotlib.use('Agg', force=True)
+        config = matplotlib.matplotlib_fname()
+        with file_transaction(config) as tx_out_file:
+            with open(config) as in_file, open(tx_out_file, "w") as out_file:
+                for line in in_file:
+                    if line.split(":")[0].strip() == "backend":
+                        out_file.write("backend: agg\n")
+                    else:
+                        out_file.write(line)
+
+def _matplotlib_installed():
+    try:
+        import matplotlib
+    except importError:
+        return False
+    return True
 
 def _symlink_bcbio(args):
     """Ensure bcbio_nextgen.py symlink in final tool directory.
@@ -136,10 +178,10 @@ def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
     conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
-    pkgs = ["biopython", "boto", "cython", "ipython", "lxml", "matplotlib",
-            "nose", "numpy", "pandas", "patsy", "pycrypto", "pip", "pysam",
-            "pyyaml", "pyzmq", "requests", "scipy", "setuptools", "sqlalchemy",
-            "statsmodels", "toolz", "tornado"]
+    pkgs = ["biopython", "boto", "cpat", "cython", "ipython", "lxml",
+            "matplotlib", "msgpack-python", "nose", "numpy", "pandas", "patsy", "pycrypto",
+            "pip", "pysam", "pyvcf", "pyyaml", "pyzmq", "reportlab", "requests", "scipy",
+            "setuptools", "sqlalchemy", "statsmodels", "toolz", "tornado"]
     channels = ["-c", "https://conda.binstar.org/bcbio"]
     if os.path.exists(conda_bin):
         subprocess.check_call([conda_bin, "install", "--yes", "numpy"])
@@ -166,7 +208,7 @@ def upgrade_bcbio_data(args, remotes):
     data_dir = _get_data_dir()
     s = _default_deploy_args(args)
     s["actions"] = ["setup_biodata"]
-    tooldir = args.tooldir or get_defaults()["tooldir"]
+    tooldir = args.tooldir or get_defaults().get("tooldir")
     if tooldir:
         s["fabricrc_overrides"]["system_install"] = tooldir
     s["fabricrc_overrides"]["data_files"] = data_dir
@@ -179,7 +221,7 @@ def upgrade_bcbio_data(args, remotes):
     _upgrade_genome_resources(s["fabricrc_overrides"]["galaxy_home"],
                               remotes["genome_resources"])
     _upgrade_snpeff_data(s["fabricrc_overrides"]["galaxy_home"], args, remotes)
-    _upgrade_vep_data(s["fabricrc_overrides"]["galaxy_home"])
+    _upgrade_vep_data(s["fabricrc_overrides"]["galaxy_home"], tooldir)
     toolplus = set([x.name for x in args.toolplus])
     if 'data' in toolplus:
         gemini = os.path.join(os.path.dirname(sys.executable), "gemini")
@@ -211,9 +253,9 @@ def _upgrade_genome_resources(galaxy_dir, base_url):
                 with open(local_file, "w") as out_handle:
                     out_handle.write(r.text)
 
-def _upgrade_vep_data(galaxy_dir):
+def _upgrade_vep_data(galaxy_dir, tooldir):
     for dbkey, ref_file in genome.get_builds(galaxy_dir):
-        effects.prep_vep_cache(dbkey, ref_file)
+        effects.prep_vep_cache(dbkey, ref_file, tooldir)
 
 def _upgrade_snpeff_data(galaxy_dir, args, remotes):
     """Install or upgrade snpEff databases, localized to reference directory.
@@ -307,7 +349,7 @@ def _install_toolplus(args, manifest_dir):
         if tool.name == "data":
             _install_gemini(args.tooldir, _get_data_dir(), args)
         elif tool.name == "kraken":
-            _install_kraken_db(tool.fname,_get_data_dir(),args)
+            _install_kraken_db(_get_data_dir(), args)
         elif tool.name in set(["gatk", "mutect"]):
             _install_gatk_jar(tool.name, tool.fname, toolplus_manifest, system_config, toolplus_dir)
         elif tool.name in set(["protected"]):  # back compatibility
@@ -387,28 +429,28 @@ def _install_gemini(tooldir, datadir, args):
         subprocess.check_call(cmd)
         os.remove(script)
 
-def _install_kraken_db( fname,datadir,args):
+def _install_kraken_db(datadir, args):
     """Install kraken minimal DB in genome folder.
     """
-    kraken = os.path.join( datadir, "genome/kraken")
+    kraken = os.path.join(datadir, "genomes/kraken")
     url = "https://ccb.jhu.edu/software/kraken/dl/minikraken.tgz"
-    compress = os.path.join(kraken,os.path.basename(url))
-    base,ext = utils.splitext_plus(os.path.basename(url))
-    db = os.path.join(kraken,base)
+    compress = os.path.join(kraken, os.path.basename(url))
+    base, ext = utils.splitext_plus(os.path.basename(url))
+    db = os.path.join(kraken, base)
     tooldir = args.tooldir or get_defaults()["tooldir"]
-    if os.path.exists(os.path.join(tooldir,"bin","kraken")):
+    if os.path.exists(os.path.join(tooldir, "bin", "kraken")):
         if not os.path.exists(kraken):
             utils.safe_makedir(kraken)
         if not os.path.exists(db):
             if not os.path.exists(compress):
-                subprocess.check_call(["wget", "-O", compress,url, "--no-check-certificate"])          
-            cmd = ["tar","-xzvf",compress,"-C",kraken]
+                subprocess.check_call(["wget", "-O", compress, url, "--no-check-certificate"])
+            cmd = ["tar", "-xzvf", compress, "-C", kraken]
             subprocess.check_call(cmd)
-            shutil.move(os.path.join(kraken,"minikraken_20140330"),os.path.join(kraken,"minikraken"))
+            shutil.move(os.path.join(kraken, "minikraken_20140330"), os.path.join(kraken, "minikraken"))
             utils.remove_safe(compress)
     else:
         raise argparse.ArgumentTypeError("kraken not installed in tooldir %s." %
-            os.path.join(tooldir,"bin","kraken"))
+                                         os.path.join(tooldir, "bin", "kraken"))
 
 # ## Store a local configuration file with upgrade details
 
@@ -457,11 +499,17 @@ def save_install_defaults(args):
 def add_install_defaults(args):
     """Add any saved installation defaults to the upgrade.
     """
+    # Ensure we install data if we've specified any secondary installation targets
+    if len(args.genomes) > 0 or len(args.aligners) > 0 or len(args.toolplus) > 0:
+        args.install_data = True
     install_config = _get_install_config()
     if install_config is None or not utils.file_exists(install_config):
         return args
     with open(install_config) as in_handle:
         default_args = yaml.load(in_handle)
+    # if we are upgrading to development, also upgrade the tools
+    if args.upgrade in ["development"]:
+        args.tools = True
     if args.tools and args.tooldir is None:
         if "tooldir" in default_args:
             args.tooldir = str(default_args["tooldir"])
@@ -519,20 +567,20 @@ def add_subparser(subparsers):
                         help="Boolean argument specifying upgrade of tools. Uses previously saved install directory",
                         action="store_true", default=False)
     parser.add_argument("-u", "--upgrade", help="Code version to upgrade",
-                        choices=["stable", "development", "system", "skip"], default="skip")
+                        choices=["stable", "development", "system", "deps", "skip"], default="skip")
     parser.add_argument("--toolplus", help="Specify additional tool categories to install",
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
-                        action="append", default=["GRCh37"],
+                        action="append", default=[],
                         choices=["GRCh37", "hg19", "mm10", "mm9", "rn5", "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                                 "xenTro3"])
+                                 "xenTro3", "TAIR10", "WBcel235"])
     parser.add_argument("--aligners", help="Aligner indexes to download",
-                        action="append", default=["bwa", "bowtie2"],
-                        choices=["bowtie", "bowtie2", "bwa", "novoalign", "star", "ucsc"])
+                        action="append", default=[],
+                        choices=["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc"])
     parser.add_argument("--data", help="Upgrade data dependencies",
                         dest="install_data", action="store_true", default=False)
-    parser.add_argument("--nosudo", help="Specify we cannot use sudo for commands",
-                        dest="sudo", action="store_false", default=True)
+    parser.add_argument("--sudo", help="Use sudo for the installation, enabling install of system packages",
+                        dest="sudo", action="store_true", default=False)
     parser.add_argument("--isolate", help="Created an isolated installation without PATH updates",
                         dest="isolate", action="store_true", default=False)
     parser.add_argument("--distribution", help="Operating system distribution",

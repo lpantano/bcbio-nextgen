@@ -25,8 +25,8 @@ def shared_variantcall(call_fn, name, align_bams, ref_file, items,
         else:
             out_file = "%s-variants.vcf.gz" % os.path.splitext(align_bams[0])[0]
     if not file_exists(out_file):
-        logger.info("Genotyping with {name}: {region} {fname}".format(
-            name=name, region=region, fname=os.path.basename(align_bams[0])))
+        logger.debug("Genotyping with {name}: {region} {fname}".format(
+              name=name, region=region, fname=os.path.basename(align_bams[0])))
         for x in align_bams:
             bam.index(x, config)
         variant_regions = config["algorithm"].get("variant_regions", None)
@@ -38,7 +38,7 @@ def shared_variantcall(call_fn, name, align_bams, ref_file, items,
             with file_transaction(out_file) as tx_out_file:
                 call_fn(align_bams, ref_file, items, target_regions,
                         tx_out_file)
-    ann_file = annotation.annotate_nongatk_vcf(out_file, align_bams, assoc_files["dbsnp"],
+    ann_file = annotation.annotate_nongatk_vcf(out_file, align_bams, assoc_files.get("dbsnp"),
                                                ref_file, config)
     return ann_file
 

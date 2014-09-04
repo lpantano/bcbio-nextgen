@@ -22,6 +22,8 @@ def variant_filtration(call_file, ref_file, vrn_files, data):
     call_file = ploidy.filter_vcf_by_sex(call_file, data)
     if caller in ["freebayes"]:
         return vfilter.freebayes(call_file, ref_file, vrn_files, data)
+    elif caller in ["platypus"]:
+        return vfilter.platypus(call_file, data)
     elif caller in ["gatk", "gatk-haplotype"]:
         return gatkfilter.run(call_file, ref_file, vrn_files, data)
     # no additional filtration for callers that filter as part of call process
@@ -30,9 +32,9 @@ def variant_filtration(call_file, ref_file, vrn_files, data):
 
 # ## High level functionality to run genotyping in parallel
 
-def get_variantcaller(data):
+def get_variantcaller(data, key="variantcaller", default="gatk"):
     if data.get("align_bam"):
-        return data["config"]["algorithm"].get("variantcaller", "gatk")
+        return tz.get_in(["config", "algorithm", key], data, default)
 
 def combine_multiple_callers(samples):
     """Collapse together variant calls from multiple approaches into single data item with `variants`.
@@ -65,10 +67,15 @@ def combine_multiple_callers(samples):
                                     "validate": data.get("validate")})
         final = callgroup[0][-1]
         def orig_variantcaller_order(x):
-            return final["config"]["algorithm"]["orig_variantcaller"].index(x["variantcaller"])
+            try:
+                return final["config"]["algorithm"]["orig_variantcaller"].index(x["variantcaller"])
+            except ValueError:
+                return final["config"]["algorithm"]["orig_jointcaller"].index(x["variantcaller"])
         if len(ready_calls) > 1 and "orig_variantcaller" in final["config"]["algorithm"]:
             final["variants"] = sorted(ready_calls, key=orig_variantcaller_order)
             final["config"]["algorithm"]["variantcaller"] = final["config"]["algorithm"].pop("orig_variantcaller")
+            if "orig_jointcaller" in final["config"]["algorithm"]:
+                final["config"]["algorithm"]["jointcaller"] = final["config"]["algorithm"].pop("orig_jointcaller")
         else:
             final["variants"] = ready_calls
         final.pop("vrn_file_batch", None)
@@ -133,13 +140,13 @@ def parallel_variantcall_region(samples, run_parallel):
     """
     to_process = []
     extras = []
-    for x in samples:
+    for data in [x[0] for x in samples]:
         added = False
-        for add in handle_multiple_variantcallers(x):
+        for add in handle_multiple_callers(data, "variantcaller", "gatk"):
             added = True
-            to_process.append(add)
+            to_process.append([add])
         if not added:
-            extras.append(x)
+            extras.append([data])
     split_fn = _split_by_ready_regions(".vcf.gz", "work_bam", get_variantcaller)
     samples = _collapse_by_bam_variantcaller(
         grouped_parallel_split_combine(to_process, split_fn,
@@ -148,11 +155,10 @@ def parallel_variantcall_region(samples, run_parallel):
                                        "vrn_file", ["region", "sam_ref", "config"]))
     return extras + samples
 
-def handle_multiple_variantcallers(data):
+def handle_multiple_callers(data, key, default=None):
     """Split samples that potentially require multiple variant calling approaches.
     """
-    assert len(data) == 1
-    callers = get_variantcaller(data[0])
+    callers = get_variantcaller(data, key, default)
     if isinstance(callers, basestring):
         return [data]
     elif not callers:
@@ -160,15 +166,15 @@ def handle_multiple_variantcallers(data):
     else:
         out = []
         for caller in callers:
-            base = copy.deepcopy(data[0])
-            base["config"]["algorithm"]["orig_variantcaller"] = \
-              base["config"]["algorithm"]["variantcaller"]
-            base["config"]["algorithm"]["variantcaller"] = caller
-            out.append([base])
+            base = copy.deepcopy(data)
+            base["config"]["algorithm"]["orig_%s" % key] = \
+              base["config"]["algorithm"][key]
+            base["config"]["algorithm"][key] = caller
+            out.append(base)
         return out
 
 def get_variantcallers():
-    from bcbio.variation import freebayes, cortex, samtools, varscan, mutect, scalpel
+    from bcbio.variation import freebayes, cortex, samtools, varscan, mutect, platypus, scalpel, vardict
     return {"gatk": gatk.unified_genotyper,
             "gatk-haplotype": gatk.haplotype_caller,
             "freebayes": freebayes.run_freebayes,
@@ -176,7 +182,9 @@ def get_variantcallers():
             "samtools": samtools.run_samtools,
             "varscan": varscan.run_varscan,
             "mutect": mutect.mutect_caller,
-            "scalpel": scalpel.run_scalpel}
+            "platypus": platypus.run,
+            "scalpel": scalpel.run_scalpel,
+            "vardict": vardict.run_vardict}
 
 def variantcall_sample(data, region=None, align_bams=None, out_file=None):
     """Parallel entry point for doing genotyping of a region of a sample.
@@ -193,9 +201,9 @@ def variantcall_sample(data, region=None, align_bams=None, out_file=None):
             items = multi.get_orig_items(data)
             assert len(items) == len(align_bams)
         call_file = "%s-raw%s" % utils.splitext_plus(out_file)
-        call_file = caller_fn(align_bams, items, sam_ref,
-                              tz.get_in(("genome_resources", "variation"), data, {}),
-                              region, call_file)
+        assoc_files = tz.get_in(("genome_resources", "variation"), data, {})
+        if not assoc_files: assoc_files = {}
+        call_file = caller_fn(align_bams, items, sam_ref, assoc_files, region, call_file)
         if data["config"]["algorithm"].get("phasing", False) == "gatk":
             call_file = phasing.read_backed_phasing(call_file, align_bams, sam_ref, region, config)
         utils.symlink_plus(call_file, out_file)

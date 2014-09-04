@@ -4,7 +4,6 @@ Handles grouping of related families or batches to go through variant
 calling simultaneously.
 """
 import collections
-import copy
 import os
 
 import toolz as tz
@@ -29,7 +28,7 @@ def group_by_batch(items):
 def bam_needs_processing(data):
     """Check if a work input needs processing for parallelization.
     """
-    return (data["work_bam"] and
+    return (data.get("work_bam") and
             any(tz.get_in(["config", "algorithm", x], data) for x in
                 ["variantcaller", "mark_duplicates", "recalibrate", "realign", "svcaller",
                  "jointcaller"]))
@@ -105,13 +104,13 @@ def _group_batches_shared(xs, caller_batch_fn, prep_data_fn):
         if batch is not None:
             batches = batch if isinstance(batch, (list, tuple)) else [batch]
             for b in batches:
-                batch_groups[(b, region, caller)].append(copy.deepcopy(data))
+                batch_groups[(b, region, caller)].append(utils.deepish_copy(data))
         else:
             data = prep_data_fn(data, [data])
             singles.append(data)
     batches = []
     for batch, items in batch_groups.iteritems():
-        batch_data = copy.deepcopy(_pick_lead_item(items))
+        batch_data = utils.deepish_copy(_pick_lead_item(items))
         batch_data = prep_data_fn(batch_data, items)
         batch_data["group_orig"] = _collapse_subitems(batch_data, items)
         batch_data["group"] = batch
@@ -149,7 +148,7 @@ def group_batches_joint(samples):
         for r in ["callable_regions", "variant_regions"]:
             data[r] = list(set(filter(lambda x: x is not None,
                                       [tz.get_in(("config", "algorithm", r), d) for d in items])))
-        data["work_bams"] = [x.get("align_bam", x["work_bam"]) for x in items]
+        data["work_bams"] = [x.get("align_bam", x.get("work_bam")) for x in items]
         data["vrn_files"] = [x["vrn_file"] for x in items]
         return data
     return _group_batches_shared(samples, _caller_batches, _prep_data)
@@ -186,7 +185,7 @@ def _pick_lead_item(items):
 
     For cancer samples, attach to tumor.
     """
-    if vcfutils.is_paired_analysis([x["work_bam"] for x in items], items):
+    if vcfutils.is_paired_analysis([x["align_bam"] for x in items], items):
         for data in items:
             if vcfutils.get_paired_phenotype(data) == "tumor":
                 return data
@@ -200,7 +199,7 @@ def get_orig_items(base):
     assert "group_orig" in base
     out = []
     for data_diff in base["group_orig"]:
-        new = copy.deepcopy(base)
+        new = utils.deepish_copy(base)
         new.pop("group_orig")
         out.append(_patch_dict(data_diff, new))
     return out

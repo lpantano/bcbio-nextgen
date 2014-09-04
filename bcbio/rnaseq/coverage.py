@@ -8,7 +8,10 @@ except ImportError:
 try:
     import gffutils
     import pandas as pd
+    import matplotlib
+    matplotlib.use('Agg', force=True)
     import matplotlib.pyplot as plt
+    plt.ioff()
 except ImportError:
     gffutils, pd, plt = None, None, None
 

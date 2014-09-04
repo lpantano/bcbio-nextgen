@@ -31,6 +31,7 @@ from bcbio.distributed.split import parallel_split_combine
 from bcbio.distributed.transaction import file_transaction
 from bcbio.pipeline import config_utils, shared
 from bcbio.provenance import do
+from bcbio.variation import bedutils
 from bcbio.variation import multi as vmulti
 
 def parallel_callable_loci(in_bam, ref_file, config):
@@ -105,7 +106,7 @@ def _get_coverage_file(in_bam, ref_file, region, region_file, depth, base_file, 
             bedtools = config_utils.get_program("bedtools", data["config"])
             max_depth = depth["max"] + 1
             cmd = ("{sambamba} view -F 'mapping_quality > 0' -L {region_file} -f bam -l 1 {in_bam} | "
-                   "{bedtools} genomecov -ibam stdin -bga -g {fai_file} -max {max_depth} "
+                   "{bedtools} genomecov -split -ibam stdin -bga -g {fai_file} -max {max_depth} "
                    "> {tx_out_file}")
             do.run(cmd.format(**locals()), "bedtools genomecov: %s" % (str(region)), data)
     # Empty output file, no coverage for the whole contig
@@ -129,7 +130,8 @@ def _get_ctype(count, depth):
 def _regions_for_coverage(data, region, ref_file, out_file):
     """Retrieve BED file of regions we need to calculate coverage in.
     """
-    variant_regions = utils.get_in(data, ("config", "algorithm", "variant_regions"))
+    variant_regions = bedutils.merge_overlaps(utils.get_in(data, ("config", "algorithm", "variant_regions")),
+                                              data)
     ready_region = shared.subset_variant_regions(variant_regions, region, out_file)
     custom_file = "%s-coverageregions.bed" % utils.splitext_plus(out_file)[0]
     if not ready_region:
@@ -390,10 +392,14 @@ def combine_sample_regions(*samples):
             else:
                 analysis_file, no_analysis_file = _combine_sample_regions_batch(batch, items)
             for data in items:
+                vr_file = tz.get_in(["config", "algorithm", "variant_regions"], data)
                 if analysis_file:
                     analysis_files.append(analysis_file)
                     data["config"]["algorithm"]["callable_regions"] = analysis_file
                     data["config"]["algorithm"]["non_callable_regions"] = no_analysis_file
+                    data["config"]["algorithm"]["callable_count"] = pybedtools.BedTool(analysis_file).count()
+                elif vr_file:
+                    data["config"]["algorithm"]["callable_count"] = pybedtools.BedTool(vr_file).count()
                 out.append([data])
         assert len(out) == len(samples)
         if len(analysis_files) > 0:

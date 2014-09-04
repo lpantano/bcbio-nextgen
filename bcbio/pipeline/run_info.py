@@ -20,6 +20,9 @@ from bcbio.variation import effects, genotype, population
 from bcbio.variation.cortex import get_sample_name
 from bcbio.bam.fastq import open_fastq
 
+ALGORITHM_NOPATH_KEYS = ["variantcaller", "realign", "recalibrate",
+                         "phasing", "svcaller", "jointcaller", "tools_off", "mixup_check"]
+
 def organize(dirs, config, run_info_yaml):
     """Organize run information from a passed YAML file or the Galaxy API.
 
@@ -74,6 +77,17 @@ def add_reference_resources(data):
     return data
 
 # ## Sample and BAM read group naming
+
+
+def _clean_metadata(data):
+    batches = tz.get_in(("metadata", "batch"), data)
+    if batches:
+        if isinstance(batches, (list, tuple)):
+            batches = [str(x) for x in batches]
+        else:
+            batches = str(batches)
+        data["metadata"]["batch"] = batches
+    return data
 
 def _clean_characters(x):
     """Clean problem characters in sample lane or descriptions.
@@ -151,7 +165,7 @@ def _check_for_misplaced(xs, subkey, other_keys):
                                    ["% 15s | % 15s | % 15s" % (a, b, c) for (a, b, c) in problems]))
 
 ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
-                      "trim_reads", "adapters", "custom_trim","kraken",
+                      "trim_reads", "adapters", "custom_trim", "kraken",
                       "align_split_size", "quality_bin",
                       "quality_format", "write_summary",
                       "merge_bamprep", "coverage",
@@ -164,7 +178,7 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "nomap_split_targets", "ensemble", "background",
                       "disambiguate", "strandedness", "fusion_mode", "min_read_length",
                       "coverage_depth_min", "coverage_depth_max", "min_allele_fraction", "remove_lcr",
-                      "archive", "tools_off", "assemble_transcripts"] +
+                      "archive", "tools_off", "assemble_transcripts", "mixup_check"] +
                      # back compatibility
                       ["coverage_depth"])
 
@@ -232,7 +246,12 @@ def _check_quality_format(items):
     fastq_extensions = ["fq.gz", "fastq.gz", ".fastq" ".fq"]
 
     for item in items:
-        specified_format = item["algorithm"].get("quality_format", "").lower()
+        specified_format = item["algorithm"].get("quality_format", "standard").lower()
+        if specified_format not in SAMPLE_FORMAT.values():
+            raise ValueError("Quality format specified in the YAML file"
+                             "is not supported. Supported values are %s."
+                             % (SAMPLE_FORMAT.values()))
+
         fastq_file = next((file for file in item.get('files', []) if
                            any([ext for ext in fastq_extensions if ext in file])), None)
 
@@ -294,6 +313,8 @@ def _file_to_abs(x, dnames):
     """
     if x is None or os.path.isabs(x):
         return x
+    elif isinstance(x, basestring) and x.lower().startswith(utils.SUPPORTED_REMOTES):
+        return x
     elif isinstance(x, basestring) and x.lower() == "none":
         return None
     else:
@@ -333,6 +354,8 @@ def _sanity_check_files(item, files):
     elif file_type == "fastq":
         if len(files) not in [1, 2]:
             msg = "Expect either 1 (single end) or 2 (paired end) fastq inputs"
+        if len(files) == 2 and files[0] == files[1]:
+            msg = "Expect both fastq files to not be the same"
     if msg:
         raise ValueError("%s for %s: %s" % (msg, item.get("description", ""), files))
 
@@ -365,7 +388,7 @@ def _run_info_from_yaml(fc_dir, run_info_yaml, config):
             item["lane"] = str(i + 1)
         item["lane"] = _clean_characters(str(item["lane"]))
         if "description" not in item:
-            if len(item.get("files", [])) == 1 and item["files"][0].endswith(".bam"):
+            if _item_is_bam(item):
                 item["description"] = get_sample_name(item["files"][0])
             else:
                 raise ValueError("No `description` sample name provided for input #%s" % (i + 1))
@@ -382,14 +405,19 @@ def _run_info_from_yaml(fc_dir, run_info_yaml, config):
             item["upload"] = upload
         item["algorithm"] = _replace_global_vars(item["algorithm"], global_vars)
         item["algorithm"] = genome.abs_file_paths(item["algorithm"],
-                                                  ignore_keys=["variantcaller", "realign", "recalibrate",
-                                                               "phasing", "svcaller", "jointcaller"])
+                                                  ignore_keys=ALGORITHM_NOPATH_KEYS)
+        item["genome_build"] = str(item.get("genome_build", ""))
         item["algorithm"] = _add_algorithm_defaults(item["algorithm"])
         item["rgnames"] = prep_rg_names(item, config, fc_name, fc_date)
         item["test_run"] = global_config.get("test_run", False)
+        item = _clean_metadata(item)
         run_details.append(item)
     _check_sample_config(run_details, run_info_yaml)
     return run_details
+
+def _item_is_bam(item):
+    files = item.get("files", [])
+    return len(files) == 1 and files[0].endswith(".bam")
 
 def _add_algorithm_defaults(algorithm):
     """Central location specifying defaults for algorithm inputs.

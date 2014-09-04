@@ -30,10 +30,12 @@ details:
       variantcaller: freebayes
       #effects: vep
       #svcaller: [delly, lumpy, cn.mops]
+      #svcaller: cnvkit
       #remove_lcr: true
       tools_off: [gemini]
+      mixup_check: qsignature
       #variantcaller: [gatk, gatk-haplotype]
-      quality_format: Standard
+      quality_format: standard
       nomap_split_size: 50
       nomap_split_targets: 100
       coverage_interval: regional
@@ -55,6 +57,8 @@ details:
     description: Test1
     genome_build: hg19
     lane: 7
+    #files: ['s3://bcbio_nextgen/testing/7_100326_FC6107FAAXX_1_fastq.txt.gz', 's3://bcbio_nextgen/testing/7_100326_FC6107FAAXX_2_fastq.txt.gz']
+    #files: s3://bcbio_test_run1/align/Test1/Test1-sort.bam
     #files: [../data/100326_FC6107FAAXX/7_100326_FC6107FAAXX_1_fastq.txt, ../data/100326_FC6107FAAXX/7_100326_FC6107FAAXX_2_fastq.txt]
     files: ../data/100326_FC6107FAAXX/7_100326_FC6107FAAXX.bam
     #files: ../data/100326_FC6107FAAXX/7_100326_FC6107FAAXX.cram

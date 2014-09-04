@@ -1,4 +1,4 @@
-version: 13
+version: 14
 
 aliases:
   human: true
@@ -16,9 +16,13 @@ variation:
   sv_repeat: ../variation/sv_repeat_telomere_centromere.bed
   dbnsfp: ../variation/dbNSFP_v2.5.gz
   ancestral: ../variation/human_ancestor.fa.rz
+  qsignature: ../variation/qsignature.vcf
 
 rnaseq:
   transcripts: ../rnaseq/ref-transcripts.gtf
   transcripts_mask: ../rnaseq/ref-transcripts-mask.gtf
   transcriptome_index:
     tophat: ../rnaseq/tophat/GRCh37_transcriptome.ver
+  dexseq: ../rnaseq/ref-transcripts.dexseq.gff3
+  refflat: ../rnaseq/ref-transcripts.refFlat
+  rRNA_fa: ../rnaseq/rRNA.fa

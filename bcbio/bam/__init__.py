@@ -19,9 +19,13 @@ from bcbio.provenance import do
 def is_paired(bam_file):
     """Determine if a BAM file has paired reads.
     """
-    with contextlib.closing(pysam.Samfile(bam_file, "rb")) as in_pysam:
-        for read in in_pysam:
-            return read.is_paired
+    bam_file = utils.remote_cl_input(bam_file)
+    cmd = ("sambamba view -h {bam_file} | head -50000 | "
+           "sambamba view -S -F paired /dev/stdin  | head -1 | wc -l")
+    out = subprocess.check_output(cmd.format(**locals()), shell=True,
+                                  executable=do.find_bash(),
+                                  stderr=open("/dev/null", "w"))
+    return int(out) > 0
 
 def index(in_bam, config):
     """Index a BAM file, skipping if index present.
@@ -213,6 +217,7 @@ def count(in_bam, config=None):
     out = subprocess.check_output(cmd, shell=True)
     return int(out)
 
+
 def sam_to_bam(in_sam, config):
     if is_bam(in_sam):
         return in_sam
@@ -231,6 +236,14 @@ def sam_to_bam(in_sam, config):
                 % (str(num_cores), in_sam, out_file)))
     return out_file
 
+def sam_to_bam_stream_cmd(config, named_pipe=None):
+    sambamba = config_utils.get_program("sambamba", config)
+    num_cores = config["algorithm"].get("num_cores", 1)
+    pipe = named_pipe if named_pipe else "/dev/stdin"
+    cmd = " {sambamba} view --format=bam -S -t {num_cores} {pipe} ".format(**locals())
+    return cmd
+
+
 def bam_to_sam(in_file, config):
     if is_sam(in_file):
         return in_file
@@ -248,6 +261,7 @@ def bam_to_sam(in_file, config):
                ("Convert BAM to SAM (%s cores): %s to %s"
                 % (str(num_cores), in_file, out_file)))
     return out_file
+
 
 def reheader(header, bam_file, config):
     samtools = config_utils.get_program("samtools", config)
@@ -317,6 +331,16 @@ def sort(in_bam, config, order="coordinate"):
                        (order, os.path.basename(in_bam),
                         os.path.basename(sort_file)))
     return sort_file
+
+def sort_cmd(config, tmp_dir, named_pipe=None, order="coordinate"):
+    """ Get a sort command, suitable for piping
+    """
+    sambamba = _get_sambamba(config)
+    pipe = named_pipe if named_pipe else "/dev/stdin"
+    order_flag = "-n" if order is "queryname" else ""
+    num_cores = config["algorithm"].get("num_cores", 1)
+    cmd = "{sambamba} sort --tmpdir {tmp_dir} -t {num_cores} {order_flag} {pipe}"
+    return cmd.format(**locals())
 
 
 def _get_sambamba(config):

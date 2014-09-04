@@ -238,12 +238,13 @@ Alignment
 
 - ``platform`` Sequencing platform used. Corresponds to the ``PL``
   parameter in BAM read groups. Default 'Illumina'.
--  ``aligner`` Aligner to use: [bwa, bowtie, bowtie2, mosaik, novoalign, star,
+-  ``aligner`` Aligner to use: [bwa, bowtie, bowtie2, mosaik, novoalign, snap, star,
    false]
 -  ``bam_clean`` Clean an input BAM when skipping alignment step. This
    handles adding read groups, sorting to a reference genome and
    filtering problem records that cause problems with GATK. Set to
-   ``picard`` to do Picard/GATK based cleaning.
+   ``picard`` to do Picard/GATK based cleaning. To fix misencoded input BAMs
+   with non-standard scores, set ``quality_format`` to ``illumina``.
 -  ``bam_sort`` Allow sorting of input BAMs when skipping alignment
    step (``aligner`` set to false). Options are coordinate or
    queryname. For additional processing through standard pipelines
@@ -253,7 +254,8 @@ Alignment
   ``genome_build``  identifiers to check and remove from alignment. Currently
   supports cleaning a single organism. For example, with ``genome_build: hg19``
   and ``disambiguate: [mm10]``, it will align to hg19 and mm10, run
-  disambiguation and continue with reads confidently aligned to hg19.
+  disambiguation and continue with reads confidently aligned to hg19. Affects
+  fusion detection when ``star`` is chosen as the aligner.
 -  ``trim_reads`` Can be set to trim low quality ends or to also trim off,
     in conjunction with the ``adapters`` field a set of adapter sequences or
     poly-A tails that could appear on the ends of reads. Only used in RNA-seq
@@ -272,8 +274,7 @@ Alignment
 -  ``quality_bin``: Perform binning of quality scores with CRAM to
    reduce file sizes. Uses the Illumina 8-bin approach. Supply a list
    of times to perform binning: [prealignment, postrecal]
--  ``quality_format`` Quality format of fastq inputs [illumina,
-   standard]
+-  ``quality_format`` Quality format of fastq or BAM inputs [standard, illumina]
 -  ``merge_bamprep`` Merge regional BAM prepped files into a final
    prepared BAM. false avoids the time consuming merge when you only
    want variant calls [true, false]
@@ -286,8 +287,11 @@ Experimental information
 ========================
 
 -  ``coverage_interval`` Regions covered by sequencing. Influences GATK
-   options for filtering. GATK will use Variant Quality Score Recalibration
-   when set to 'genome', otherwise we apply hard filters. [exome, genome, regional]
+   options for filtering and GATK will use Variant Quality Score Recalibration
+   when set to 'genome', otherwise we apply hard filters. Also affects cn.mops
+   structural variant calling and deep panel calling in cancer samples, where
+   we tune regional/exome analyses to maximize sensitivity.
+   [exome, genome, regional]
 - ``coverage_depth_max`` Maximum depth of coverage. We downsample coverage
    regions with more than this value to approximately the specified
    coverage. Actual coverage depth per position will be higher since we
@@ -307,17 +311,31 @@ Variant calling
 ===============
 
 -  ``variantcaller`` Variant calling algorithm. Can be a list of
-   multiple options [gatk, freebayes, varscan, samtools,
-   gatk-haplotype, cortex, mutect, scalpel]
+   multiple options [gatk, freebayes, gatk-haplotype, platypus,
+   mutect, scalpel, vardict, varscan, samtools]
     - Paired (typically somatic, tumor-normal) variant calling is currently
-      supported by freebayes, varscan, mutect (see disclaimer below) 
-      and scalpel (indels only). See ``phenotype`` below for how to pair tumor 
+      supported by freebayes, varscan, mutect (see disclaimer below),
+      scalpel (indels only) and vardict. See ``phenotype`` below for how to pair tumor
       and normal samples.
-    - Selecting mutect (SNP caller) will implicitly also call indels using scalpel and 
+    - Selecting mutect (SNP caller) will implicitly also call indels using scalpel and
       combine the output. Mutect operates in both tumor-normal and tumor-only modes.
       In tumor-only mode the indels from scalpel will reflect all indels in the sample,
       as there is currently no way of separating the germline from somatic indels in
       tumor-only mode.
+- ``jointcaller`` Joint calling algorithm, combining variants called with the
+  specified ``variantcaller``. Can be a list of multiple options but needs to
+  match with appropriate ``variantcaller``
+     - ``gatk-haplotype-joint`` `GATK incremental joint discovery
+       <http://www.broadinstitute.org/gatk/guide/article?id=3893>`_ with
+       HaplotypeCaller. Takes individual gVCFs called by ``gatk-haploype`` and
+       perform combined genotyping.
+     - ``freebayes-joint`` Combine freebayes calls using `bcbio.variation.recall
+       <https://github.com/chapmanb/bcbio.variation.recall`_ with recalling at
+       all positions found in each individual sample. Requires ``freebayes``
+       variant calling.
+     - ``platypus-joint`` Combine platypus calls using bcbio.variation.recall
+       with squaring off at all positions found in each individual
+       sample. Requires ``platypus`` variant calling.
 -  ``variant_regions`` BED file of regions to call variants in.
 -  ``mark_duplicates`` Identify and remove variants [true, false]
    If true, will perform streaming duplicate marking with `samblaster`_ for
@@ -364,6 +382,21 @@ Variant calling
 .. _biobambam's bammarkduplicates: https://github.com/gt1/biobambam
 .. _Heng Li's variant artifacts paper: http://arxiv.org/abs/1404.0929
 
+Structural variant calling
+==========================
+
+- ``svcaller`` -- List of structural variant callers to use. [lumpy, delly,
+  cn.mops]. LUMPY and DELLY require paired end reads. cn.mops works on whole
+  genome data as well as targeted experiments; our usage requires
+  multiple samples grouped into a batch within the :ref:`_sample-configuration`.
+- ``svvalidate`` -- Dictionary of call types and pointer to BED file of known
+  regions. For example: ``DEL: known_deletions.bed`` does deletion based
+  validation of outputs against the BED file.
+- ``fusion_mode`` Enable fusion detection in RNA-seq when using STAR (recommended)
+  or Tophat (not recommended) as the aligner. OncoFuse is used to summarise the fusions
+  but currently only supports ``hg19`` and ``GRCh37``. For explant samples
+  ``disambiguate`` enables disambiguation of ``STAR`` output [false, true].
+
 Cancer variant calling
 ======================
 
@@ -371,6 +404,18 @@ Cancer variant calling
   heterogeneous tumor samples, set as the float or integer percentage to
   resolve (i.e. 10 = alleles in 10% of the sample). Defaults to 10. Specify this
   in the tumor sample of a tumor/normal pair.
+
+Quality control
+===============
+
+- ``mixup_check`` Detect potential sample mixups. Currently supports
+  `qSignature <https://sourceforge.net/p/adamajava/wiki/qSignature/>`_.
+  ``qsignature_full`` runs a larger analysis while ``qsignature`` runs a smaller
+  subset on chromosome 22.  [False, qsignature, qsignature_full]
+- ``kraken`` Turn on kraken algorithm to detect possible contamination. You can add `kraken: True` and it will use a minimal database to detect possible `contaminants`_. As well, you can point to a `custom database`_ directory and kraken will use it. You will find the results in the `qc` directory. This tool only run during `rnaseq` pipeline.
+
+.. _contaminants: https://ccb.jhu.edu/software/kraken/
+.. _custom database: https://github.com/DerrickWood/kraken
 
 Post-processing
 ===============

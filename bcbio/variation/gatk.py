@@ -2,9 +2,13 @@
 """
 from distutils.version import LooseVersion
 
+import toolz as tz
+
 from bcbio import bam, broad, utils
 from bcbio.distributed.transaction import file_transaction
+from bcbio.pipeline import config_utils
 from bcbio.pipeline.shared import subset_variant_regions
+from bcbio.pipeline import datadict as dd
 from bcbio.variation import annotation, bamprep, ploidy
 
 def _shared_gatk_call_prep(align_bams, items, ref_file, dbsnp, region, out_file):
@@ -58,6 +62,16 @@ def unified_genotyper(align_bams, items, ref_file, assoc_files,
             broad_runner.run_gatk(params)
     return out_file
 
+def _joint_calling(items):
+    """Determine if this call feeds downstream into joint calls.
+    """
+    jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), items[0])
+    if jointcaller:
+        assert len(items) == 1, "Can only do joint calling preparation with GATK with single samples"
+        assert tz.get_in(("metadata", "batch"), items[0]) is not None, \
+            "Joint calling requires batched samples, %s has no metadata batch." % dd.get_sample_name(items[0])
+    return jointcaller is not None
+
 def haplotype_caller(align_bams, items, ref_file, assoc_files,
                        region=None, out_file=None):
     """Call variation with GATK's HaplotypeCaller.
@@ -81,6 +95,12 @@ def haplotype_caller(align_bams, items, ref_file, assoc_files,
             # Enable hardware based optimizations in GATK 3.1+
             if LooseVersion(broad_runner.gatk_major_version()) >= LooseVersion("3.1"):
                 params += ["--pair_hmm_implementation", "VECTOR_LOGLESS_CACHING"]
+            if _joint_calling(items):  # Prepare gVCFs if doing joint calling
+                params += ["--emitRefConfidence", "GVCF", "--variant_index_type", "LINEAR",
+                           "--variant_index_parameter", "128000"]
+            resources = config_utils.get_resources("gatk-haplotype", items[0]["config"])
+            if "options" in resources:
+                params += [str(x) for x in resources.get("options", [])]
             broad_runner.new_resources("gatk-haplotype")
             broad_runner.run_gatk(params)
     return out_file

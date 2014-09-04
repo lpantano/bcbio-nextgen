@@ -9,19 +9,29 @@ details:
     metadata:
       batch: TestBatch1
     algorithm:
-      aligner: false
-      mark_duplicates: false
       recalibrate: false
       realign: false
-      variantcaller: false
-      jointcaller: bcbio-variation-recall
+      aligner: bwa
+      mark_duplicates: true
+      variantcaller: [gatk-haplotype, freebayes]
+      jointcaller: [gatk-haplotype-joint, freebayes-joint]
+      #aligner: false
+      #mark_duplicates: false
+      #variantcaller: false
+      #jointcaller: freebayes-joint
+      nomap_split_size: 50
+      nomap_split_targets: 100
+      variant_regions: ../data/automated/variant_regions-bam.bed
+      validate: ../data/reference_material/7_100326_FC6107FAAXX-grade.vcf
       effects: vep
   - algorithm:
       aligner: bwa
       recalibrate: false
       realign: false
-      variantcaller: freebayes
-      jointcaller: bcbio-variation-recall
+      #variantcaller: freebayes
+      #jointcaller: freebayes-joint
+      variantcaller: [gatk-haplotype, freebayes]
+      jointcaller: [gatk-haplotype-joint, freebayes-joint]
       effects: vep
       quality_format: Standard
       nomap_split_size: 50

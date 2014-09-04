@@ -5,7 +5,6 @@ https://github.com/ekg/freebayes
 
 from collections import namedtuple
 import os
-import shutil
 
 try:
     import vcf
@@ -17,7 +16,7 @@ from bcbio.distributed.transaction import file_transaction
 from bcbio.pipeline import config_utils
 from bcbio.pipeline.shared import subset_variant_regions
 from bcbio.provenance import do
-from bcbio.variation import annotation, ploidy
+from bcbio.variation import annotation, bedutils, ploidy
 from bcbio.variation.vcfutils import (get_paired_bams, is_paired_analysis,
                                       bgzip_and_index, move_vcf)
 
@@ -29,10 +28,16 @@ def region_to_freebayes(region):
         return region
 
 def _freebayes_options_from_config(items, config, out_file, region=None):
+    """Prepare standard options from configuration input.
+
+    Input BED target files are merged to avoid overlapping regions which
+    cause FreeBayes to call multiple times.
+    """
     opts = []
     opts += ["--ploidy", str(ploidy.get_ploidy(items, region))]
 
-    variant_regions = utils.get_in(config, ("algorithm", "variant_regions"))
+    variant_regions = bedutils.merge_overlaps(utils.get_in(config, ("algorithm", "variant_regions")),
+                                              items[0])
     target = subset_variant_regions(variant_regions, region, out_file, items)
     if target:
         if isinstance(target, basestring) and os.path.isfile(target):
@@ -42,11 +47,6 @@ def _freebayes_options_from_config(items, config, out_file, region=None):
     resources = config_utils.get_resources("freebayes", config)
     if resources.get("options"):
         opts += resources["options"]
-    if "--min-alternate-fraction" not in " ".join(opts) and "-F" not in " ".join(opts):
-        # add minimum reportable allele frequency, for which FreeBayes defaults to 20
-         min_af = float(utils.get_in(config, ("algorithm",
-                                              "min_allele_fraction"),20)) / 100.0
-         opts += ["--min-alternate-fraction", str(min_af)]
     return opts
 
 def run_freebayes(align_bams, items, ref_file, assoc_files, region=None,
@@ -92,7 +92,7 @@ def _run_freebayes_caller(align_bams, items, ref_file, assoc_files,
                    "{compress_cmd} > {tx_out_file}")
             do.run(cmd.format(**locals()), "Genotyping with FreeBayes", {})
     ann_file = annotation.annotate_nongatk_vcf(out_file, align_bams,
-                                               assoc_files["dbsnp"],
+                                               assoc_files.get("dbsnp"),
                                                ref_file, config)
     return ann_file
 
@@ -109,38 +109,45 @@ def _run_freebayes_paired(align_bams, items, ref_file, assoc_files,
         with file_transaction(out_file) as tx_out_file:
             paired = get_paired_bams(align_bams, items)
             if not paired.normal_bam:
-                raise ValueError("Require both tumor and normal BAM files for FreeBayes cancer calling")
+                return _run_freebayes_caller(align_bams, items, ref_file,
+                                             assoc_files, region, out_file)
+                #raise ValueError("Require both tumor and normal BAM files for FreeBayes cancer calling")
 
             vcfsamplediff = config_utils.get_program("vcfsamplediff", config)
             vcffilter = config_utils.get_program("vcffilter", config)
+            vcfallelicprimitives = config_utils.get_program("vcfallelicprimitives", config)
+            vcfstreamsort = config_utils.get_program("vcfstreamsort", config)
             freebayes = config_utils.get_program("freebayes", config)
             opts = " ".join(_freebayes_options_from_config(items, config, out_file, region))
-            opts += " -f {}".format(ref_file)
             if "--min-alternate-fraction" not in opts and "-F" not in opts:
                 # add minimum reportable allele frequency
                 # FreeBayes defaults to 20%, but use 10% by default for the
                 # tumor case
                 min_af = float(utils.get_in(paired.tumor_config, ("algorithm",
-                                                                  "min_allele_fraction"),10)) / 100.0
+                                                                  "min_allele_fraction"), 10)) / 100.0
                 opts += " --min-alternate-fraction %s" % min_af
+            opts += " --min-repeat-entropy 1 --experimental-gls"
+            # Recommended settings for cancer calling
+            # https://groups.google.com/d/msg/freebayes/dTWBtLyM4Vs/HAK_ZhJHguMJ
+            opts += " --pooled-discrete --genotype-qualities --report-genotype-likelihood-max"
             # NOTE: The first sample name in the vcfsamplediff call is
             # the one supposed to be the *germline* one
-
             # NOTE: -s in vcfsamplediff (strict checking: i.e., require no
             # reads in the germline to call somatic) is not used as it is
             # too stringent
             compress_cmd = "| bgzip -c" if out_file.endswith("gz") else ""
-            cl = ("{freebayes} --pooled-discrete --genotype-qualities "
-                  "{opts} {paired.tumor_bam} {paired.normal_bam} "
-                  "| {vcffilter} -f 'QUAL > 1' -s "
+            cl = ("{freebayes} -f {ref_file} {opts} "
+                  "{paired.tumor_bam} {paired.normal_bam} "
+                  "| {vcffilter} -f 'QUAL > 5' -s "
+                  "| {vcfallelicprimitives} | {vcfstreamsort} "
                   "| {vcfsamplediff} VT {paired.normal_name} {paired.tumor_name} - "
-                  "{compress_cmd} >  {tx_out_file}")
+                  "{compress_cmd} > {tx_out_file}")
             bam.index(paired.tumor_bam, config)
             bam.index(paired.normal_bam, config)
             do.run(cl.format(**locals()), "Genotyping paired variants with FreeBayes", {})
     fix_somatic_calls(out_file, config)
     ann_file = annotation.annotate_nongatk_vcf(out_file, align_bams,
-                                               assoc_files["dbsnp"], ref_file,
+                                               assoc_files.get("dbsnp"), ref_file,
                                                config)
     return ann_file
 
@@ -209,6 +216,9 @@ def fix_somatic_calls(in_file, config):
         # Add info to the header of the reader
         reader.infos["SOMATIC"] = somatic_info
         reader.filters["REJECT"] = reject_filter
+        for ext in [".gz", ".gz.tbi"]:
+            if os.path.exists(out_file + ext):
+                os.remove(out_file + ext)
         with file_transaction(out_file) as tx_out_file:
             with open(tx_out_file, "wb") as handle:
                 writer = vcf.VCFWriter(handle, template=reader)

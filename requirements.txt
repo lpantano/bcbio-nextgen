@@ -2,7 +2,7 @@ biopython>=1.61
 boto>=2.9.6
 Cython>=0.19
 ipython>=2.0.0
-ipython-cluster-helper>=0.2.23
+ipython-cluster-helper>=0.3.1
 Logbook>=0.6.0
 lxml>=3.3.5
 nose>=1.3.0
@@ -13,7 +13,7 @@ toolz>=0.6.0
 tornado>=3.1.0
 # soft dependencies -- not required for bcbio-nextgen-vm
 bioblend>=0.4.3
-cutadapt>=1.2.1
+cutadapt==1.4.2
 fabric>=1.7.0
 gffutils>=0.8.1
 HTSeq >= 0.5.4p5
@@ -26,4 +26,5 @@ PyVCF>=0.6.7
 sh>=1.07
 arvados-python-client>=0.1.1405019228.4a7ca04
 chanjo>=1.1.1
-bcbio-nextgen==0.7.9
+msgpack-python>=0.4.0
+bcbio-nextgen==0.8.1

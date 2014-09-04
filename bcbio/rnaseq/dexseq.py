@@ -2,27 +2,41 @@
 perform exon-level counting using DEXSeq
 """
 import os
-import sys
-from bcbio.utils import R_package_path, file_exists
+from bcbio.utils import R_package_path, file_exists, safe_makedir
 from bcbio.distributed.transaction import file_transaction
 from bcbio.provenance import do
 from bcbio import bam
+from bcbio.log import logger
+import bcbio.pipeline.datadict as dd
+
+def bcbio_run(data):
+    out_dir = os.path.join(dd.get_work_dir(data), "dexseq")
+    safe_makedir(out_dir)
+    sample_name = dd.get_sample_name(data)
+    out_file = os.path.join(out_dir, sample_name + ".dexseq")
+    bam_file = dd.get_work_bam(data)
+    dexseq_gff = dd.get_dexseq_gff(data)
+    stranded = dd.get_strandedness(data)
+    return run_count(bam_file, dexseq_gff, stranded, out_file)
 
 def run_count(bam_file, dexseq_gff, stranded, out_file):
     """
     run dexseq_count on a BAM file
     """
     assert file_exists(bam_file), "%s does not exist." % bam_file
-    assert file_exists(dexseq_gff), "%s does not exist." % dexseq_gff
     sort_order = bam._get_sort_order(bam_file, {})
     assert sort_order, "Cannot determine sort order of %s." % bam_file
     strand_flag = _strand_flag(stranded)
     assert strand_flag, "%s is not a valid strandedness value." % stranded
+    if not file_exists(dexseq_gff):
+        logger.info("%s was not found, so exon-level counting is being "
+                    "skipped." % dexseq_gff)
+        return None
 
     dexseq_count = _dexseq_count_path()
     if not dexseq_count:
-        logger.error("DEXseq is not installed, aborting.")
-        sys.exit(1)
+        logger.info("DEXseq is not installed, skipping exon-level counting.")
+        return None
 
     sort_flag = "name" if sort_order == "queryname" else "pos"
     is_paired = bam.is_paired(bam_file)

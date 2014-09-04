@@ -179,7 +179,7 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = disambiguate.resolve(samples, run_parallel)
             with profile.report("callable regions", dirs):
                 samples = run_parallel("postprocess_alignment", samples)
-                samples = run_parallel("combine_sample_regions", [samples])
+                samples = run_parallel("combine_sample_regions", samples)
                 samples = region.clean_sample_data(samples)
             with profile.report("coverage", dirs):
                 samples = coverage.summarize_samples(samples, run_parallel)
@@ -196,7 +196,7 @@ class Variant2Pipeline(AbstractPipeline):
         ## Finalize variants, BAMs and population databases (per-sample multicore cluster)
         with prun.start(_wres(parallel, ["gatk", "gatk-vqsr", "snpeff", "bcbio_variation",
                                          "gemini", "samtools", "fastqc", "bamtools",
-                                         "bcbio-variation-recall"]),
+                                         "bcbio-variation-recall", "qsignature"]),
                         samples, config, dirs, "multicore2") as run_parallel:
             with profile.report("joint squaring off/backfilling", dirs):
                 samples = joint.square_off(samples, run_parallel)
@@ -223,12 +223,12 @@ class Variant2Pipeline(AbstractPipeline):
         logger.info("Timing: finished")
         return samples
 
-
 def _debug_samples(i, samples):
     print "---", i, len(samples)
     for sample in (x[0] for x in samples):
         print "  ", sample["description"], sample.get("region"), \
             utils.get_in(sample, ("config", "algorithm", "variantcaller")), \
+            utils.get_in(sample, ("config", "algorithm", "jointcaller")), \
             [x.get("variantcaller") for x in sample.get("variants", [])], \
             sample.get("work_bam")
 
@@ -255,10 +255,10 @@ class StandardPipeline(AbstractPipeline):
                 samples = run_parallel("process_alignment", samples)
             with profile.report("callable regions", dirs):
                 samples = run_parallel("postprocess_alignment", samples)
-                samples = run_parallel("combine_sample_regions", [samples])
+                samples = run_parallel("combine_sample_regions", samples)
                 samples = region.clean_sample_data(samples)
         ## Quality control
-        with prun.start(_wres(parallel, ["fastqc", "bamtools", "samtools"]),
+        with prun.start(_wres(parallel, ["fastqc", "bamtools", "samtools", "qsignature", "kraken"]),
                         samples, config, dirs, "multicore2") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
@@ -296,7 +296,7 @@ class RnaseqPipeline(AbstractPipeline):
                 samples = run_parallel("trim_sample", samples)
         with prun.start(_wres(parallel, ["aligner", "picard"],
                               ensure_mem={"tophat": 8, "tophat2": 8, "star": 40}),
-                        samples, config, dirs, "multicore",
+                        samples, config, dirs, "alignment",
                         multiplier=alignprep.parallel_multiplier(samples)) as run_parallel:
             with profile.report("alignment", dirs):
                 samples = disambiguate.split(samples)
@@ -309,12 +309,10 @@ class RnaseqPipeline(AbstractPipeline):
                 samples = rnaseq.assemble_transcripts(run_parallel, samples)
             with profile.report("estimate expression", dirs):
                 samples = rnaseq.estimate_expression(samples, run_parallel)
-
-        with prun.start(_wres(parallel, ["picard", "fastqc", "rnaseqc","kraken"]),
-                        samples, config, dirs, "persample") as run_parallel:
+        with prun.start(_wres(parallel, ["picard", "fastqc", "rnaseqc", "kraken"]),
+                        samples, config, dirs, "qc") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
-        
         logger.info("Timing: finished")
         return samples
 

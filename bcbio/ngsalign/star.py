@@ -1,13 +1,13 @@
 import os
-import tempfile
 
 from bcbio.pipeline import config_utils
-from bcbio.utils import safe_makedir, file_exists, get_in, symlink_plus
+from bcbio.distributed.transaction import file_transaction
+from bcbio.utils import (safe_makedir, file_exists, get_in, is_gzipped)
 from bcbio.provenance import do
-from bcbio import bam
+from bcbio import bam, utils
 
 CLEANUP_FILES = ["Aligned.out.sam", "Log.out", "Log.progress.out"]
-ALIGN_TAGS =  ["NH", "HI", "NM", "MD", "AS"]
+ALIGN_TAGS = ["NH", "HI", "NM", "MD", "AS"]
 
 def align(fastq_file, pair_file, ref_file, names, align_dir, data):
     config = data["config"]
@@ -26,7 +26,9 @@ def align(fastq_file, pair_file, ref_file, names, align_dir, data):
     cmd = ("{star_path} --genomeDir {ref_file} --readFilesIn {fastq} "
            "--runThreadN {num_cores} --outFileNamePrefix {out_prefix} "
            "--outReadsUnmapped Fastx --outFilterMultimapNmax 10 "
+           "--outStd SAM "
            "--outSAMunmapped Within --outSAMattributes %s" % " ".join(ALIGN_TAGS))
+    cmd = cmd + " --readFilesCommand zcat " if is_gzipped(fastq_file) else cmd
     cmd += _read_group_option(names)
     fusion_mode = get_in(data, ("config", "algorithm", "fusion_mode"), False)
     if fusion_mode:
@@ -34,12 +36,14 @@ def align(fastq_file, pair_file, ref_file, names, align_dir, data):
     strandedness = get_in(data, ("config", "algorithm", "strandedness"),
                           "unstranded").lower()
     if strandedness == "unstranded":
-        cmd += " --outSAMstrandField intronMotif"
-    run_message = "Running STAR aligner on %s and %s." % (pair_file, ref_file)
-    do.run(cmd.format(**locals()), run_message, None)
-    out_file = bam.sam_to_bam(out_file, config)
-    if not file_exists(final_out):
-        symlink_plus(out_file, final_out)
+        cmd += " --outSAMstrandField intronMotif "
+    with utils.curdir_tmpdir(data) as tmp_dir:
+        sam_to_bam = bam.sam_to_bam_stream_cmd(config)
+        sort = bam.sort_cmd(config, tmp_dir)
+        cmd += "| {sam_to_bam} | {sort} -o {tx_final_out} "
+        run_message = "Running STAR aligner on %s and %s." % (fastq_file, ref_file)
+        with file_transaction(final_out) as tx_final_out:
+            do.run(cmd.format(**locals()), run_message, None)
     return final_out
 
 def _read_group_option(names):

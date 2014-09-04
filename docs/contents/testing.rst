@@ -83,6 +83,28 @@ less disk and computational requirements.
 
 .. _CEPH NA12878 family: http://blog.goldenhelix.com/wp-content/uploads/2013/03/Utah-Pedigree-1463-with-NA12878.png
 
+Structural variant calling -- whole genome trio (50x)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This example runs structural variant calling with multiple callers (Lumpy, Delly
+and cn.mops), providing a combined output summary file and validation metrics
+against NA12878 deletions. It uses the same NA12878 family starting material as
+the whole genome trio example.
+
+To run the analysis do::
+
+  mkdir -p NA12878-sv-eval/config NA12878-sv-eval/input NA12878-sv-eval/work
+  cd NA12878-sv-eval/config
+  wget https://raw.github.com/chapmanb/bcbio-nextgen/master/config/examples/NA12878-trio-sv.yaml
+  cd ../input
+  wget https://raw.github.com/chapmanb/bcbio-nextgen/master/config/examples/NA12878-trio-sv-getdata.sh
+  bash NA12878-trio-sv-getdata.sh
+  cd ../work
+  bcbio_nextgen.py ../config/NA12878-trio-sv.yaml -n 16
+
+This is large whole genome analysis and the timing and disk space requirements
+for the NA12878 trio analysis above apply here as well.
+
 Whole genome (10x)
 ~~~~~~~~~~~~~~~~~~
 An input configuration for running whole gnome variant calling with
@@ -195,38 +217,27 @@ RNAseq example
 ~~~~~~~~~~~~~~
 
 This example aligns and creates count files for use with downstream analyses
-using the SEQC data from the FDA's Sequencing Quality Control project. The
-rnaseq-seqc.yaml is
+using a subset of the SEQC data from the FDA's Sequencing Quality Control project. 
 
-Get the input configuration files::
+Get the setup script and run it, this will download six samples from the SEQC project, 
+three from the HBRR panel and three from the UHRR panel. It will also set up a configuration
+file for the run, using the templating system::
 
-  wget https://raw.github.com/chapmanb/bcbio-nextgen/master/config/examples/rnaseq-seqc.yaml
-  wget https://raw.github.com/chapmanb/bcbio-nextgen/master/config/examples/seqc.csv
+  wget https://raw.github.com/chapmanb/bcbio-nextgen/master/config/examples/rnaseq-seqc-getdata.sh
+  bash rnaseq-seqc-data.sh
+  
+Now go into the work directory and run the analysis::
 
-Get the FASTQ files from the SEQC project::
-
-  mkdir fastq
-  cd fastq
-  wget https://s3.amazonaws.com/bcbio-nextgen-test-data/seqc.tar
-  tar xvf seqc.tar
-  cd ..
-
-Use the `templating system`_ to set up an analysis::
-
-  bcbio_nextgen.py -w template rnaseq-seqc.yalm seqc.csv fastq
-
-Go into the work directory and run your analysis::
-
-  cd seqc/work
-  bcbio_nextgen.py ../config/seqc.yaml -n 16
-
+   cd seqc/work
+   bcbio_nextgen.py ../config/seqc.yaml -n 8
+   
 This will run a full scale RNAseq experiment using Tophat2 as the
 aligner and will take a long time to finish on a single machine. At
 the end it will output counts, Cufflinks quantitation and a set of QC
 results about each lane. If you have a cluster you can `parallelize it`_
-to speed it up considerably.
+to speed it up considerably. 
 
-A nice looking standalone `report`_ of the bcbio-nextgen can be generated using
+A nice looking standalone `report`_ of the bcbio-nextgen run can be generated using
 `bcbio.rnaseq`_. Check that repository for details.
 
 .. _templating system: https://bcbio-nextgen.readthedocs.org/en/latest/contents/configuration.html#automated-sample-configuration

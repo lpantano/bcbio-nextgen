@@ -25,10 +25,12 @@ and `improvements to filtering and VQSR`_.
    -  `GATK Unified Genotyper`_ (supports both GATK-lite in GATK 2.3
       and commercial restricted version in GATK 2.4+)
 
--  Paired tumor / normal variant calling:
+-  Tumor (/ normal paired) variant calling:
 
    - `MuTect`_ (version 1.1.5 and above)
    - `VarScan`_
+   - `FreeBayes`_
+   - `VarDict`_
 
 -  Quality filtering, using either hard filtering or
    `GATK's Variant Quality Score Recalibrator`_ (VQSR). VQSR
@@ -82,6 +84,12 @@ about each sample and some provenance data. In that directory is also a
 differential expression calling using any count-based method such as EdgeR,
 DESeq2 or voom+limma, etc.
 
+Standard
+~~~~~~~~
+
+This pipeline implements `alignment` and `qc` tools. Furthermore, it will run `qsignature`_ to detect possible duplicated samples, or miss-labeling. It uses SNPs signature to create a distance matrix that helps easily to create groups. The project yaml file will show number of total samples analyzed, number of very similar samples, and samples that could be duplicated.
+
+.. _qsignature: http://sourceforge.net/p/adamajava/wiki/qSignature/
 
 Configuration
 =============
@@ -154,7 +162,7 @@ sample configuration file for that analysis::
     details:
       - files: [/full/path/to/control_rep1.fastq]
 	description: 'Control_rep1'
-	genome_build: GRCm38
+	genome_build: mm10
 	analysis: RNA-seq
 	algorithm:
              aligner: tophat2
@@ -163,7 +171,7 @@ sample configuration file for that analysis::
 	     adapters: [nextera, polya]
       - files: [/full/path/to/control_rep2.fastq]
 	description: 'Control_rep2'
-	genome_build: GRCm38
+	genome_build: mm10
 	analysis: RNA-seq
 	algorithm:
              aligner: tophat2
@@ -172,7 +180,7 @@ sample configuration file for that analysis::
 	     adapters: [nextera, polya]
       - files: [/full/path/to/case_rep1.fastq]
 	description: 'Case_rep1'
-	genome_build: GRCm38
+	genome_build: mm10
 	analysis: RNA-seq
 	algorithm:
              aligner: tophat2
@@ -181,7 +189,7 @@ sample configuration file for that analysis::
 	     adapters: [nextera, polya]
       - files: [/full/path/to/case_rep2.fastq]
 	description: 'Case_rep2'
-	genome_build: GRCm38
+	genome_build: mm10
 	analysis: RNA-seq
 	algorithm:
              aligner: tophat2
@@ -240,3 +248,4 @@ templating system.
 .. _variant evaluation framework: http://bcbio.wordpress.com/2014/05/12/wgs-trio-variant-evaluation/
 .. _FreeBayes and BAM post-alignment processing: https://bcbio.wordpress.com/2013/10/21/updated-comparison-of-variant-detection-methods-ensemble-freebayes-and-minimal-bam-preparation-pipelines/
 .. _improvements to filtering and VQSR: https://bcbio.wordpress.com/2013/05/06/framework-for-evaluating-variant-detection-methods-comparison-of-aligners-and-callers/
+.. _VarDict: https://github.com/AstraZeneca-NGS/VarDict
