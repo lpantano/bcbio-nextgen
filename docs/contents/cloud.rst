@@ -18,9 +18,6 @@ usage to make it more intuitive so provides the same functionality as
 bcbio uses `Elasticluster <https://github.com/gc3-uzh-ch/elasticluster>`_,
 to build a cluster on AWS with an optional Lustre shared filesystem.
 
-AWS support is still a work in progress and the current approach only supports
-GRCh37 analyses. We welcome feedback and will continue to improve.
-
 Local setup
 ===========
 
@@ -39,8 +36,8 @@ way to install is using `conda`_ with an isolated Python::
 Data preparation
 ================
 
-The easiest way to organize an AWS project is using an `S3 bucket
-<http://aws.amazon.com/s3/>`_. Create a unique bucket for your analysis and
+The easiest way to organize AWS projects is using an analysis folder inside an
+`S3 bucket <http://aws.amazon.com/s3/>`_. Create a bucket and folder for your analysis and
 upload fastq, BAM and, optionally, a region BED file. You can do this using the
 `AWS S3 web console <https://console.aws.amazon.com/s3/>`_,
 `the AWS cli client <http://aws.amazon.com/cli/>`_ or specialized tools
@@ -53,13 +50,17 @@ upload both of these files to S3.
 
 With that in place, prepare and upload the final configuration to S3 with::
 
-    bcbio_vm.py template s3://your-project/template.yaml s3://your-project/name.csv
+    bcbio_vm.py template s3://your-project/your-analysis/template.yaml s3://your-project/your-analysis/name.csv
 
-This will find the input files in the ``s3://your-project`` bucket, associate
+This will find the input files in the ``s3://your-project/your-analysis`` bucket, associate
 fastq and BAM files with the right samples, and add a found BED files as
 ``variant_regions`` in the configuration. It will then upload the final
-configuration back to S3 as ``s3://your-project/name.yaml``, which you can run
+configuration back to S3 as ``s3://your-project/your-analysis/name.yaml``, which you can run
 directly from a bcbio cluster on AWS.
+
+We currently support human analysis with both the GRCh37 and hg19 genomes. We
+can also add additional genomes as needed by the community and generally welcome
+feedback and comments on reference data support.
 
 Extra software
 ~~~~~~~~~~~~~~
@@ -70,9 +71,9 @@ manual download from the `GATK download`_ site for academic users.  Appistry
 provides `a distribution of GATK for commercial users`_. Commercial users also
 need a license for somatic calling with muTect. To make these jars available,
 upload them to the S3 bucket in a ``jars`` directory. bcbio will automatically
-include the correct GATK and muTect directives during your run.  You can also
-manually specify the path to the jars using the global ``resources`` section
-of your input sample YAML file::
+include the correct GATK and muTect directives during your run.  Alternatively,
+you can also manually specify the path to the jars using the global
+``resources`` section of your input sample YAML file::
 
     resources:
       gatk:
@@ -107,6 +108,14 @@ The second configures a VPC to host bcbio::
 
   bcbio_vm.py aws vpc
 
+The ``aws vpc`` command is idempotent and can run multiple times if you change or
+remove parts of the infrastructure. You can also rerun the ``aws iam`` command,
+but if you'd like to generate a new elasticluster
+``~/.bcbio/elasticluster/config`` add the recreate flag: ``bcbio_vm.py aws iam
+--recreate``. This generates a new set of IAM credentials and public/private
+keys. These are only stored in the ``~/.bcbio`` directory so you need to fully
+recreate them if you delete the old ones.
+
 Running a cluster
 =================
 
@@ -118,6 +127,11 @@ The ``~/.bcbio/elasticluster/config`` file defines the number of compute nodes
 to start. If you set up your AWS configuration manually, the bcbio-vm GitHub
 repository has the `latest example configuration
 <https://github.com/chapmanb/bcbio-nextgen-vm/blob/master/elasticluster/config>`_.
+You'll want to edit this to match the number of cores and resources you'd like
+to use. The defaults only have small instances to prevent accidentally starting
+an `expensive run <http://aws.amazon.com/ec2/pricing/>`_. If you're planning a
+run with less than 32 cores, do not use a cluster and instead run directly on a single
+machine using one of the `large r3 or c3 instances <http://aws.amazon.com/ec2/instance-types/>`_.
 
 To start a cluster with a SLURM manager front end node and 2 compute nodes::
 
@@ -125,12 +139,13 @@ To start a cluster with a SLURM manager front end node and 2 compute nodes::
     setup_provider=ansible-slurm
     frontend_nodes=1
     compute_nodes=2
-    flavor=r3.8xlarge
+    flavor=c3.8xlarge
 
     [cluster/bcbio/frontend]
-    flavor=m3.large
-    root_volume_size=100
-    root_volume_type=gp2
+    flavor=c3.large
+    root_volume_size=200
+    root_volume_type=io1
+    root_volume_iops=3000
 
 To start a single machine without a cluster to compute directly on::
 
@@ -138,12 +153,12 @@ To start a single machine without a cluster to compute directly on::
     setup_provider=ansible
     frontend_nodes=1
     compute_nodes=0
-    flavor=m3.large
 
     [cluster/bcbio/frontend]
     flavor=m3.2xlarge
-    root_volume_size=100
-    root_volume_type=gp2
+    root_volume_size=200
+    root_volume_type=io1
+    root_volume_iops=3000
 
 Adjust the number of nodes, machine size flavors and root volume size as
 desired. Elasticluster mounts the frontend root volume across all machines using
@@ -152,13 +167,15 @@ for details on launching and attaching this to a cluster.
 
 Once customized, start the cluster with::
 
-    bcbio_vm.py elasticluster start bcbio
+    bcbio_vm.py elasticluster start bcbio -v
 
-The cluster will take five to ten minutes to start. Once running,
+The cluster will take five to ten minutes to start. If you encounter any
+intermittent failures due to connectivity, you can rerun the configuration step with
+``bcbio_vm.py elasticluster setup bcbio -v`` on the same cluster. Once running,
 install the bcbio wrapper code, Dockerized tools and system configuration
 with::
 
-    bcbio_vm.py aws bcbio bootstrap
+    bcbio_vm.py aws bcbio bootstrap -v
 
 Running Lustre
 ==============
@@ -196,7 +213,7 @@ If you started a single machine without a cluster run with::
 
     mkdir ~/run/your-project
     cd !$ && mkdir work && cd work
-    bcbio_vm.py run -n 8 s3://your-project/name.yaml
+    bcbio_vm.py run -n 8 s3://your-project/your-analysis/name.yaml
 
 Where the ``-n`` argument should be the number of cores on the machine.
 
@@ -205,17 +222,50 @@ To run on a full cluster with a Lustre filesystem::
     sudo mkdir /scratch/cancer-dream-syn3-exome
     sudo chown ubuntu !$
     cd !$ && mkdir work && cd work
-    bcbio_vm.py ipythonprep s3://your-project/name.yaml \
-                            slurm cloud -r 'mincores=30' -r 'timelimit=2-00:00:00' -n 60
+    bcbio_vm.py ipythonprep s3://your-project/your-analysis/name.yaml slurm cloud -n 60
     sbatch bcbio_submit.sh
 
-Where 30 is the cores per node on the worker machines (minus 2 to account for
-the base bcbio_vm script and IPython controller) and 60 is the total number of
-cores across all the worker nodes.
+Where 60 is the total number of cores to use across all the worker nodes.
+Of your total machine cores, allocate 2 for the base bcbio_vm script and IPython
+controller instances. The `SLURM workload manager <http://slurm.schedmd.com/>`_
+distributes jobs across your cluster. A ``slurm-PID.out`` file in the work
+directory contains the current status of the job, and ``sacct`` provides the
+status of jobs on the cluster. If you are new to SLURM, here is a summary
+of useful `SLURM commands <https://rc.fas.harvard.edu/resources/running-jobs/#Summary_of_SLURM_commands>`_.
 
 On successful completion, bcbio uploads the results of the analysis back into your s3
-bucket as ``s3://your-project/final``. You can now cleanup the cluster and
+bucket and folder as ``s3://your-project/your-analysis/final``. You can now cleanup the cluster and
 Lustre filesystem.
+
+Graphing resource usage
+=======================
+
+AWS runs include automatic monitoring of resource usage with
+`collectl <http://collectl.sourceforge.net/>`_. bcbio_vm uses collectl statistics
+to plot CPU, memory, disk and network usage during each step of a run. To
+prepare resource usage plots after finishing an analysis, first copy the
+``bcbio-nextgen.log`` file to your local computer. Either use
+``bcbio_vm.py elasticluster sftp bcbio`` to copy from the work directory on AWS
+(``~/run/your-project/work/log/bcbio-nextgen.log``) or transfer it from the
+output S3 bucket (``your-project/your-analysis/final/DATE_your-project/bcbio-nextgen.log``).
+
+If your run worked cleanly you can use the log input file directly. If you had
+failures and restarts, or would only like to graph part of the run, you can edit
+the timing steps. Run ``grep Timing bcbio-nextgen.log > your-run.txt`` to get
+the timing steps only, then edit as desired.
+
+Retrieve the collectl statistics from the AWS cluster and prepare the resource
+usage graphs with::
+
+    bcbio_vm.py graph bcbio-nextgen.log
+
+Collectl stats will be in ``monitoring/collectl`` and plots are in
+``monitoring/graphs``. If you need to re-run plots later after shutting the
+cluster down, you can use the local collectl stats instead of retrieving from
+the server by running ``bcbio_vm.py graph bcbio-nextgen.log --cluster none``.
+In addition to plots, the
+`summarize_timing.py <https://github.com/chapmanb/bcbio-nextgen/blob/master/scripts/utils/summarize_timing.py>`_
+utility script prepares a summary table of run times per step.
 
 Shutting down
 =============

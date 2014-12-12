@@ -1,3 +1,32 @@
+## 0.8.5 (in progress)
+
+- No longer keep INFO fields with `vcfallelicprimitves` in FreeBayes,
+  Platypus and Scalpel calling to prevent introduction of problematic
+  fields for multi-allelic MNPs.
+- Use `mincores` specification to ipython-cluster-helper to combine single core
+  jobs into a single submission job for better memory shared on resource
+  constrained systems.
+- Move disambiguation split work inside parallel framework so download and
+  preparation occurs on worker nodes or inside Docker containers. Enables on
+  demand download of disambiguation genomes.
+- Switch to seaborn as matplotlib wrapper, from prettplotlib.
+- Add Express to RNA-seq pipeline
+
+## 0.8.4 (29 November 2014)
+
+- Improvements in VarDict calling on somatic samples.
+- Fix compatibility issue with bedtools 2.22.0 when calculating genome coverage.
+- Fix joint calling upload to avoid redundant inclusion of full VCF file in
+  individual sample directories.
+- Fixes for inclusion of GATK jars inside Docker contains when running
+  distributed jobs.
+- Enable generation of STAR indexes on demand to handle running STAR on AWS
+  instances.
+- Re-organize code to prepare samples and reference genomes so it runs inside
+  distributed processing components. This isolates process to Docker containers
+  on AWS and also enables complex operations like preparing reference genomes on
+  demand.
+
 ## 0.8.3 (19 November 2014)
 
 - Improve tumor/normal calling with FreeBayes, MuTect, VarDict and VarScan by

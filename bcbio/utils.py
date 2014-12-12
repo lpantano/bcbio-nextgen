@@ -47,14 +47,14 @@ def dl_remotes(fname, input_dir, dl_dir=None):
     else:
         return fname
 
-def remote_cl_input(fname):
+def remote_cl_input(fname, unpack=True):
     """Return command line input for a file, handling streaming remote cases.
     """
     if not fname:
         return fname
     elif fname.startswith("s3://"):
         bucket, key = s3_bucket_key(fname)
-        gunzip = "| gunzip -c" if fname.endswith(".gz") else ""
+        gunzip = "| gunzip -c" if fname.endswith(".gz") and unpack else ""
         return "<(gof3r get --no-md5 -k {key} -b {bucket} {gunzip})".format(**locals())
     else:
         return fname
@@ -113,7 +113,14 @@ def s3_handle(fname):
 
     bucket, key = s3_bucket_key(fname)
     s3 = boto.connect_s3()
-    s3b = s3.get_bucket(bucket)
+    try:
+        s3b = s3.get_bucket(bucket)
+    except boto.exception.S3ResponseError, e:
+        # if we don't have bucket permissions but folder permissions, try without validation
+        if e.status == 403:
+            s3b = s3.get_bucket(bucket, validate=False)
+        else:
+            raise
     s3key = s3b.get_key(key)
     return S3Handle(s3key)
 
@@ -645,11 +652,19 @@ def dictapply(d, fn):
             d[k] = fn(v)
     return d
 
+def R_sitelib():
+    """Retrieve the R site-library installed with the bcbio installer.
+    """
+    from bcbio import install
+    return os.path.join(install.get_defaults().get("tooldir", "/usr/local"),
+                        "lib", "R", "site-library")
+
 def R_package_path(package):
     """
     return the path to an installed R package
     """
-    cmd = "Rscript -e 'find.package(\"{package}\")'"
+    local_sitelib = R_sitelib()
+    cmd = """Rscript -e '.libPaths(c("{local_sitelib}")); find.package("{package}")'"""
     try:
         output = subprocess.check_output(cmd.format(**locals()), shell=True)
     except subprocess.CalledProcessError, e:
@@ -673,3 +688,9 @@ def open_possible_gzip(fname, flag="r"):
         return gzip.open(fname, flag)
     else:
         return open(fname, flag)
+
+def filter_missing(xs):
+    """
+    remove items from a list if they evaluate to False
+    """
+    return filter(lambda x: x, xs)

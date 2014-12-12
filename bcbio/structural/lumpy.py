@@ -38,7 +38,7 @@ def _run_lumpy(full_bams, sr_bams, disc_bams, work_dir, items):
                 full_bams = ",".join(full_bams)
                 sr_bams = ",".join(sr_bams)
                 disc_bams = ",".join(disc_bams)
-                exclude = "-x %s" % sv_exclude_bed if sv_exclude_bed else ""
+                exclude = "-x %s" % sv_exclude_bed if utils.file_exists(sv_exclude_bed) else ""
                 ref_file = dd.get_ref_file(items[0])
                 # use our bcbio python for runs within speedseq
                 curpython_dir = os.path.dirname(sys.executable)
@@ -140,6 +140,8 @@ def _bedpe_to_vcf(bedpe_file, sconfig_file, items):
 
 def _filter_by_bedpe(vcf_file, bedpe_file, data):
     """Add filters to VCF based on pre-filtered bedpe file.
+
+    Also removes problem calls in the output VCF with missing alleles.
     """
     out_file = "%s-filter%s" % utils.splitext_plus(vcf_file)
     nogzip_out_file = out_file.replace(".vcf.gz", ".vcf")
@@ -158,6 +160,9 @@ def _filter_by_bedpe(vcf_file, bedpe_file, data):
                     for line in in_handle:
                         if not line.startswith("#"):
                             parts = line.split("\t")
+                            # Problem breakends can have empty alleles when at contig ends
+                            if not parts[3].strip():
+                                parts[3] = "N"
                             cur_id = parts[2].split("_")[0]
                             cur_filter = filters.get(cur_id, "PASS")
                             if cur_filter != "PASS":
@@ -171,7 +176,7 @@ def _filter_by_bedpe(vcf_file, bedpe_file, data):
 def run(items):
     """Perform detection of structural variations with lumpy, using bwa-mem alignment.
     """
-    if not all(utils.get_in(data, ("config", "algorithm", "aligner")) == "bwa" for data in items):
+    if not all(utils.get_in(data, ("config", "algorithm", "aligner")) in ["bwa", False, None] for data in items):
         raise ValueError("Require bwa-mem alignment input for lumpy structural variation detection")
     work_dir = utils.safe_makedir(os.path.join(items[0]["dirs"]["work"], "structural", items[0]["name"][-1],
                                                "lumpy"))

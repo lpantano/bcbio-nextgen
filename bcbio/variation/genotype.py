@@ -9,7 +9,7 @@ import toolz as tz
 from bcbio import utils
 from bcbio.distributed.split import grouped_parallel_split_combine
 from bcbio.pipeline import region
-from bcbio.variation import gatk, gatkfilter, multi, phasing, ploidy, vfilter
+from bcbio.variation import gatk, gatkfilter, multi, phasing, ploidy, vfilter, qsnp
 
 # ## Variant filtration -- shared functionality
 
@@ -62,11 +62,17 @@ def combine_multiple_callers(samples):
                 if jointcaller:
                     cur["population"] = False
                 ready_calls.append(cur)
-            if jointcaller:
+            elif jointcaller:
                 ready_calls.append({"variantcaller": jointcaller,
                                     "vrn_file": data.get("vrn_file"),
                                     "vrn_file_batch": data.get("vrn_file_batch"),
-                                    "validate": data.get("validate")})
+                                    "validate": data.get("validate"),
+                                    "do_upload": False})
+            else:
+                ready_calls.append({"variantcaller": "precalled",
+                                    "vrn_file": data.get("vrn_file"),
+                                    "validate": data.get("validate"),
+                                    "do_upload": False})
         final = callgroup[0][-1]
         def orig_variantcaller_order(x):
             try:
@@ -186,7 +192,8 @@ def get_variantcallers():
             "mutect": mutect.mutect_caller,
             "platypus": platypus.run,
             "scalpel": scalpel.run_scalpel,
-            "vardict": vardict.run_vardict}
+            "vardict": vardict.run_vardict,
+            "qsnp": qsnp.run_qsnp}
 
 def variantcall_sample(data, region=None, align_bams=None, out_file=None):
     """Parallel entry point for doing genotyping of a region of a sample.

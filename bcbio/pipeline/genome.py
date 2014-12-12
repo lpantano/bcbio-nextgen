@@ -3,12 +3,15 @@
 import ConfigParser
 import glob
 import os
+import sys
 from xml.etree import ElementTree
 
 import toolz as tz
 import yaml
 
 from bcbio import utils
+from bcbio.log import logger
+from bcbio.ngsalign import star
 from bcbio.pipeline import alignment
 from bcbio.provenance import do
 
@@ -41,24 +44,30 @@ def abs_file_paths(xs, base_dir=None, ignore_keys=None):
     """Normalize any file paths found in a subdirectory of configuration input.
     """
     ignore_keys = set([]) if ignore_keys is None else set(ignore_keys)
-    if not isinstance(xs, dict):
-        return xs
     if base_dir is None:
         base_dir = os.getcwd()
     orig_dir = os.getcwd()
     os.chdir(base_dir)
     input_dir = os.path.join(base_dir, "inputs")
-    out = {}
-    for k, v in xs.iteritems():
-        if k not in ignore_keys and v and isinstance(v, basestring):
-            if v.lower() == "none":
-                out[k] = None
-            elif os.path.exists(v) or v.startswith(utils.SUPPORTED_REMOTES):
-                out[k] = os.path.normpath(os.path.join(base_dir, utils.dl_remotes(v, input_dir)))
+    if isinstance(xs, dict):
+        out = {}
+        for k, v in xs.iteritems():
+            if k not in ignore_keys and v and isinstance(v, basestring):
+                if v.lower() == "none":
+                    out[k] = None
+                elif os.path.exists(v) or v.startswith(utils.SUPPORTED_REMOTES):
+                    out[k] = os.path.normpath(os.path.join(base_dir, utils.dl_remotes(v, input_dir)))
+                else:
+                    out[k] = v
             else:
                 out[k] = v
+    elif isinstance(xs, basestring):
+        if os.path.exists(xs) or xs.startswith(utils.SUPPORTED_REMOTES):
+            out = os.path.normpath(os.path.join(base_dir, utils.dl_remotes(xs, input_dir)))
         else:
-            out[k] = v
+            out = xs
+    else:
+        out = xs
     os.chdir(orig_dir)
     return out
 
@@ -97,7 +106,7 @@ def _galaxy_loc_iter(loc_file, galaxy_dt, need_remap=False):
         with open(loc_file) as in_handle:
             for line in in_handle:
                 if line.strip() and not line.startswith("#"):
-                    parts = line.strip().split("\t")
+                    parts = [x.strip() for x in line.strip().split("\t")]
                     # Detect and report spaces instead of tabs
                     if len(parts) == 1:
                         parts = [x.strip() for x in line.strip().split(" ") if x.strip()]
@@ -126,6 +135,13 @@ def _get_ref_from_galaxy_loc(name, genome_build, loc_file, galaxy_dt, need_remap
     remap_fn = alignment.TOOLS[name].remap_index_fn
     need_remap = remap_fn is not None
     if len(refs) == 0:
+        # if we have an S3 connection, try to download
+        try:
+            import boto
+            boto.connect_s3()
+        except:
+            raise ValueError("Could not find reference genome file %s %s" % (genome_build, name))
+        logger.info("Downloading %s %s from AWS" % (genome_build, name))
         cur_ref = _download_prepped_genome(genome_build, data, name, need_remap)
     # allow multiple references in a file and use the most recently added
     else:
@@ -169,7 +185,7 @@ def get_refs(genome_build, aligner, galaxy_base, data):
     name_remap = {"samtools": "fasta"}
     if genome_build:
         galaxy_config = _get_galaxy_tool_info(galaxy_base)
-        for name in [x for x in (aligner, "samtools") if x]:
+        for name in [x for x in ("samtools", aligner) if x]:
             galaxy_dt = _get_galaxy_data_table(name, galaxy_config["tool_data_table_config_path"])
             loc_file, need_remap = _get_galaxy_loc_file(name, galaxy_dt, galaxy_config["tool_data_path"],
                                                         galaxy_base)
@@ -210,21 +226,36 @@ REMAP_NAMES = {"tophat2": "bowtie2",
                "samtools": "seq"}
 S3_INFO = {"bucket": "biodata",
            "key": "prepped/{build}/{build}-{target}.tar.gz"}
+INPLACE_INDEX = {"star": star.index}
 
 def _download_prepped_genome(genome_build, data, name, need_remap):
     """Get a pre-prepared genome from S3, unpacking it locally.
 
-    Supports runs on AWS where we can retrieve the resources on demand.
+    Supports runs on AWS where we can retrieve the resources on demand. Upgrades
+    GEMINI in place if installed inside a Docker container with the biological data.
+    GEMINI install requires write permissions to standard data directories -- works
+    on AWS but not generalizable elsewhere.
     """
+    from bcbio.variation import population
     out_dir = utils.safe_makedir(os.path.join(tz.get_in(["dirs", "work"], data),
                                               "inputs", "data", "genomes"))
     ref_dir = os.path.join(out_dir, genome_build, REMAP_NAMES.get(name, name))
     if not os.path.exists(ref_dir):
-        with utils.chdir(out_dir):
-            bucket = S3_INFO["bucket"]
-            key = S3_INFO["key"].format(build=genome_build, target=REMAP_NAMES.get(name, name))
-            cmd = ("gof3r get --no-md5 -k {key} -b {bucket} | pigz -d -c | tar -xvp")
-            do.run(cmd.format(**locals()), "Download pre-prepared genome data: %s" % genome_build)
+        target = REMAP_NAMES.get(name, name)
+        if target in INPLACE_INDEX:
+            ref_file = glob.glob(os.path.normpath(os.path.join(ref_dir, os.pardir, "seq", "*.fa")))[0]
+            INPLACE_INDEX[target](ref_file, ref_dir, data)
+        else:
+            with utils.chdir(out_dir):
+                bucket = S3_INFO["bucket"]
+                key = S3_INFO["key"].format(build=genome_build, target=REMAP_NAMES.get(name, name))
+                cmd = ("gof3r get --no-md5 -k {key} -b {bucket} | pigz -d -c | tar -xvp")
+                do.run(cmd.format(**locals()), "Download pre-prepared genome data: %s" % genome_build)
+    ref_file = glob.glob(os.path.normpath(os.path.join(ref_dir, os.pardir, "seq", "*.fa")))[0]
+    gresources = get_resources(data["genome_build"], ref_file)
+    if data.get("files") and population.do_db_build([data], need_bam=False, gresources=gresources):
+        cmd = [os.path.join(os.path.dirname(sys.executable), "gemini"), "update", "--dataonly"]
+        do.run(cmd, "Download GEMINI data")
     genome_dir = os.path.join(out_dir, genome_build)
     genome_build = genome_build.replace("-test", "")
     if need_remap or name == "samtools":

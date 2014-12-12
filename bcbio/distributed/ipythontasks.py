@@ -10,7 +10,7 @@ from bcbio.rnaseq import sailfish
 from bcbio.distributed import ipython
 from bcbio.ngsalign import alignprep
 from bcbio.pipeline import (archive, config_utils, disambiguate, sample,
-                            qcsummary, shared, variation, rnaseq)
+                            qcsummary, shared, variation, run_info, rnaseq)
 from bcbio.provenance import system
 from bcbio.variation import (bamprep, coverage, genotype, ensemble, joint,
                              multi, population, recalibrate, validate, vcfutils)
@@ -162,6 +162,13 @@ def run_cufflinks(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(rnaseq.run_cufflinks, *args))
 
+@require(rnaseq)
+def run_express(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(rnaseq.run_express, *args))
+
+
 @require(shared)
 def combine_bam(*args):
     args = ipython.unzip_args(args)
@@ -234,6 +241,12 @@ def run_disambiguate(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(disambiguate.run, *args))
 
+@require(disambiguate)
+def disambiguate_split(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(disambiguate.split, *args))
+
 @require(system)
 def machine_info(*args):
     args = ipython.unzip_args(args)
@@ -267,3 +280,9 @@ def cufflinks_merge(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(rnaseq.cufflinks_merge, *args))
+
+@require(run_info)
+def organize_samples(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(run_info.organize, *args))

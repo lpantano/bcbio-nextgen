@@ -36,7 +36,8 @@ def get_fastq_files(item):
     if should_gzip:
         ready_files = [_gzip_fastq(x) for x in ready_files]
     for in_file in ready_files:
-        assert os.path.exists(in_file), "%s does not exist." % in_file
+        if not in_file.startswith(utils.SUPPORTED_REMOTES):
+            assert os.path.exists(in_file), "%s does not exist." % in_file
     return ((ready_files[0] if len(ready_files) > 0 else None),
             (ready_files[1] if len(ready_files) > 1 else None))
 
@@ -44,7 +45,8 @@ def _gzip_fastq(in_file):
     """
     gzip a fastq file if it is not already gzipped
     """
-    if fastq.is_fastq(in_file) and not utils.is_gzipped(in_file):
+    if (fastq.is_fastq(in_file) and not utils.is_gzipped(in_file)
+          and not in_file.startswith(utils.SUPPORTED_REMOTES)):
         gzipped_file = in_file + ".gz"
         if file_exists(gzipped_file):
             return gzipped_file
@@ -86,7 +88,6 @@ def _convert_bam_to_fastq(in_file, work_dir, item, dirs, config):
         out2 = None
     return [out1, out2]
 
-
 def merge(files, out_file, config):
     """merge smartly fastq files. It recognizes paired fastq files."""
     pair1 = [fastq_file[0] for fastq_file in files]
@@ -101,16 +102,16 @@ def merge(files, out_file, config):
     else:
         return _merge_list_fastqs(pair1, out_file, config)
 
-
 def _merge_list_fastqs(files, out_file, config):
     """merge list of fastq files into one"""
     if not all(map(fastq.is_fastq, files)):
         raise ValueError("Not all of the files to merge are fastq files: %s " % (files))
     assert all(map(utils.file_exists, files)), ("Not all of the files to merge "
                                                 "exist: %s" % (files))
-    if len(files) == 1:
-        sys.symlink(files[0], out_file)
     if not os.path.exists(out_file):
+        if len(files) == 1:
+            os.symlink(files[0], out_file)
+            return out_file
         gz_files = [_gzip_fastq(fn) for fn in files]
         with file_transaction(out_file) as file_txt_out:
             files_str = " ".join(list(gz_files))

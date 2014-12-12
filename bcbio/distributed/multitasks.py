@@ -2,7 +2,7 @@
 """
 from bcbio import structural, utils, chipseq
 from bcbio.bam import callable
-from bcbio.rnaseq import sailfish
+from bcbio.rnaseq import (sailfish, express)
 from bcbio.ngsalign import alignprep
 from bcbio.pipeline import (archive, disambiguate, qcsummary, sample,
                             main, shared, variation, run_info, rnaseq)
@@ -79,6 +79,10 @@ def run_cufflinks(*args):
     return rnaseq.run_cufflinks(*args)
 
 @utils.map_wrap
+def run_express(*args):
+    return rnaseq.run_express(*args)
+
+@utils.map_wrap
 def combine_bam(*args):
     return shared.combine_bam(*args)
 
@@ -135,6 +139,10 @@ def run_disambiguate(*args):
     return disambiguate.run(*args)
 
 @utils.map_wrap
+def disambiguate_split(*args):
+    return disambiguate.split(*args)
+
+@utils.map_wrap
 def clean_chipseq_alignment(*args):
     return chipseq.clean_chipseq_alignment(*args)
 
@@ -156,7 +164,7 @@ def cufflinks_merge(*args):
 
 @utils.map_wrap
 def organize_samples(*args):
-    return run_info.organize_samples(*args)
+    return run_info.organize(*args)
 
 @utils.map_wrap
 def run_main(*args):
