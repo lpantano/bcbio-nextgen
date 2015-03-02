@@ -558,11 +558,7 @@ def get_defaults():
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
     """
-<<<<<<< HEAD
-    std_choices = set(["data", "cadd", "dbnsfp","kraken"])
-=======
     std_choices = set(["data", "cadd", "dbnsfp", "kraken"])
->>>>>>> upstream/master
     if x in std_choices:
         return Tool(x, None)
     elif "=" in x and len(x.split("=")) == 2:
