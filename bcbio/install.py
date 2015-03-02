@@ -73,11 +73,14 @@ def upgrade_bcbio(args):
             _symlink_bcbio(args, script="bcbio_setup_genome.py")
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
+    if args.toolplus:
+        print("Installing additional tools")
+        _install_toolplus(args)
     if args.install_data:
+        if len(args.aligners) == 0:
+            print("Warning: no aligners provided with `--aligners` flag")
         if len(args.genomes) == 0:
             print("Data not installed, no genomes provided with `--genomes` flag")
-        elif len(args.aligners) == 0:
-            print("Data not installed, no aligners provided with `--aligners` flag")
         else:
             with bcbio_tmpdir():
                 print("Upgrading bcbio-nextgen data files")
@@ -117,7 +120,7 @@ def _set_matplotlib_default_backend():
 def _matplotlib_installed():
     try:
         import matplotlib
-    except importError:
+    except ImportError:
         return False
     return True
 
@@ -346,12 +349,11 @@ def upgrade_thirdparty_tools(args, remotes):
             if not fname.startswith("toolplus"):
                 os.remove(os.path.join(manifest_dir, fname))
     cbl_manifest.create(manifest_dir, args.tooldir)
-    print("Installing additional tools")
-    _install_toolplus(args, manifest_dir)
 
-def _install_toolplus(args, manifest_dir):
+def _install_toolplus(args):
     """Install additional tools we cannot distribute, updating local manifest.
     """
+    manifest_dir = os.path.join(_get_data_dir(), "manifest")
     toolplus_manifest = os.path.join(manifest_dir, "toolplus-packages.yaml")
     system_config = os.path.join(_get_data_dir(), "galaxy", "bcbio_system.yaml")
     toolplus_dir = os.path.join(_get_data_dir(), "toolplus")
@@ -512,8 +514,10 @@ def save_install_defaults(args):
 def add_install_defaults(args):
     """Add any saved installation defaults to the upgrade.
     """
+    def _has_data_toolplus(args):
+        return len([x for x in args.toolplus if x.name not in ["gatk", "mutect"]]) > 0
     # Ensure we install data if we've specified any secondary installation targets
-    if len(args.genomes) > 0 or len(args.aligners) > 0 or len(args.toolplus) > 0:
+    if len(args.genomes) > 0 or len(args.aligners) > 0 or _has_data_toolplus(args):
         args.install_data = True
     install_config = _get_install_config()
     if install_config is None or not utils.file_exists(install_config):
@@ -538,9 +542,9 @@ def add_install_defaults(args):
             if x not in getattr(args, attr):
                 new_val.append(x)
             setattr(args, attr, new_val)
-    if "sudo" in default_args and not args.sudo is False:
+    if "sudo" in default_args and args.sudo is not False:
         args.sudo = default_args["sudo"]
-    if "isolate" in default_args and not args.isolate is True:
+    if "isolate" in default_args and args.isolate is not True:
         args.isolate = default_args["isolate"]
     return args
 
@@ -583,7 +587,7 @@ def add_subparser(subparsers):
                         action="append", default=[], choices=SUPPORTED_GENOMES)
     parser.add_argument("--aligners", help="Aligner indexes to download",
                         action="append", default=[],
-                        choices = SUPPORTED_INDEXES)
+                        choices=SUPPORTED_INDEXES)
     parser.add_argument("--data", help="Upgrade data dependencies",
                         dest="install_data", action="store_true", default=False)
     parser.add_argument("--sudo", help="Use sudo for the installation, enabling install of system packages",

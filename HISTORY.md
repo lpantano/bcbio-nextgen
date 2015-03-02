@@ -1,4 +1,12 @@
-## 0.8.6 (in progress)
+## 0.8.7 (in progress)
+
+- Fix preparation of multi-allelic inputs to GEMINI by implementing custom merge
+  of bi-allelic and split multi-allelic. Previous implementation using GATK
+  CombineVariants re-merged some split multi-allelic, losing effects annotations.
+- Skip contig order naming checking with bedtools 2.23.0+ to avoid potential
+  issues with complex naming schemes.
+
+## 0.8.6 (23 February 2015)
 
 - Calculate high depth regions with more than 20x median coverage as targets for
   filtering in structural variants. Attempts to detect and avoid spurious calls
@@ -9,6 +17,16 @@
   GEMINI, since it only handles bi-allelic inputs. Thanks to Pär Larsson.
 - Pass ploidy to GATK HaplotypeCaller, supporting multiple ploidies and correct
   calling of X/Y/MT chromosomes. Requires GATK 3.3.
+- Remove extra 'none' sample when calling tumor-only samples using
+  MuTect. Harmonizes headers with other tumor-only callers and enables
+  tumor-only ensemble calling. Thanks to Miika Ahdesmaki.
+- Perform variant prioritization as part of tumor-only calling, using population
+  based frequencies like 1000 genomes and ExAC and presence in known disease
+  causing databases like COSMIC and Clinvar.
+- Switch to samtools sort from sambamba sort during alignment streaming. Saves
+  steps in processing and conversions on single sample no deduplication inputs.
+- On AWS, download inputs for S3 instead of streaming into fastq preparation to
+  avoid issues with converting BAM to fasta. Thanks to Roy Ronen.
 - Provide better defaults for mincores that packs together multiple single IPython
   processes on a single cluster request -- use core specification from input
   configuration. Thanks to Miika Ahdesmaki.

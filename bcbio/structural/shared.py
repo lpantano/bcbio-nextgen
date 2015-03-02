@@ -142,7 +142,7 @@ def _find_to_filter(in_file, exclude_file, params, to_exclude):
     an entire repeat.
     """
     import pybedtools
-    for feat in pybedtools.BedTool(in_file).intersect(pybedtools.BedTool(exclude_file), wao=True):
+    for feat in pybedtools.BedTool(in_file).intersect(pybedtools.BedTool(exclude_file), wao=True, nonamecheck=True):
         us_chrom, us_start, us_end, name, other_chrom, other_start, other_end, overlap = feat.fields
         if float(overlap) > 0:
             other_size = float(other_end) - float(other_start)
@@ -202,7 +202,7 @@ def _extract_split_and_discordants(in_bam, work_dir, data):
             with file_transaction(data, sr_file) as tx_sr_file:
                 with file_transaction(data, disc_file) as tx_disc_file:
                     with file_transaction(data, dedup_file) as tx_dedup_file:
-                        samblaster_cl = postalign.samblaster_dedup_sort(data, tmpdir, tx_dedup_file,
+                        samblaster_cl = postalign.samblaster_dedup_sort(data, tx_dedup_file,
                                                                         tx_sr_file, tx_disc_file)
                         out_base = os.path.join(tmpdir, "%s-namesort" % os.path.splitext(in_bam)[0])
                         cmd = ("{samtools} sort -n -o -@ {cores} -m {mem} {in_bam} {out_base} | "

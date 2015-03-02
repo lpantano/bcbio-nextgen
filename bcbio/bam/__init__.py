@@ -37,6 +37,9 @@ def index(in_bam, config):
     alt_index_file = "%s.bai" % os.path.splitext(in_bam)[0]
     if (not utils.file_uptodate(index_file, in_bam) and
           not utils.file_uptodate(alt_index_file, in_bam)):
+        # Remove old index files and re-run to prevent linking into tx directory
+        for fname in [index_file, alt_index_file]:
+            utils.remove_safe(fname)
         sambamba = _get_sambamba(config)
         samtools = config_utils.get_program("samtools", config)
         num_cores = config["algorithm"].get("num_cores", 1)
@@ -48,14 +51,7 @@ def index(in_bam, config):
                 cmd = "{sambamba} index -t {num_cores} {tx_bam_file}"
             else:
                 cmd = "{samtools} index {tx_bam_file}"
-            # sambamba has intermittent multicore failures. Allow
-            # retries with single core
-            try:
-                do.run(cmd.format(**locals()), "Index BAM file: %s" % os.path.basename(in_bam),
-                       log_error=False)
-            except:
-                do.run(samtools_cmd.format(**locals()),
-                       "Index BAM file (single core): %s" % os.path.basename(in_bam))
+            do.run(cmd.format(**locals()), "Index BAM file: %s" % os.path.basename(in_bam))
     return index_file if utils.file_uptodate(index_file, in_bam) else alt_index_file
 
 def idxstats(in_bam, data):
@@ -298,7 +294,8 @@ def merge(bamfiles, out_bam, config):
         except subprocess.CalledProcessError:
             files = " -in ".join(bamfiles)
             cmd = "{bamtools} merge -in {files} -out {tx_out_bam}"
-            do.run(cmd.format(**locals()), "Error with other tools. Merge %s into %s with bamtools" % (bamfiles, out_bam))
+            do.run(cmd.format(**locals()), "Error with other tools. Merge %s into %s with bamtools" %
+                   (bamfiles, out_bam))
     index(out_bam, config)
     return out_bam
 
@@ -348,10 +345,11 @@ def sort_cmd(config, tmp_dir, named_pipe=None, order="coordinate"):
     sambamba = _get_sambamba(config)
     pipe = named_pipe if named_pipe else "/dev/stdin"
     order_flag = "-n" if order is "queryname" else ""
+    resources = config_utils.get_resources("samtools", config)
     num_cores = config["algorithm"].get("num_cores", 1)
-    cmd = "{sambamba} sort --tmpdir {tmp_dir} -t {num_cores} {order_flag} {pipe}"
+    mem = config_utils.adjust_memory(resources.get("memory", "2G"), 1, "decrease").upper()
+    cmd = ("{sambamba} sort -m {mem} --tmpdir {tmp_dir} -t {num_cores} {order_flag} -o /dev/stdout {pipe}")
     return cmd.format(**locals())
-
 
 def _get_sambamba(config):
     try:

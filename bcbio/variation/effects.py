@@ -112,6 +112,8 @@ def prep_vep_cache(dbkey, ref_file, tooldir=None, config=None):
 def run_vep(in_file, data):
     """Annotate input VCF file with Ensembl variant effect predictor.
     """
+    if not vcfutils.vcf_has_variants(in_file):
+        return None
     out_file = utils.append_stem(in_file, "-vepeffects")
     assert in_file.endswith(".gz") and out_file.endswith(".gz")
     if not utils.file_exists(out_file):
@@ -185,14 +187,9 @@ def _get_loftee(data):
 # ## snpEff variant effects
 
 def snpeff_version(args=None):
-    from bcbio.install import get_defaults
-    tooldir = (args and args.tooldir) or get_defaults()["tooldir"]
     raw_version = programs.get_version_manifest("snpeff")
     if not raw_version:
-        config = {"resources": {"snpeff": {"jvm_opts": ["-Xms500m", "-Xmx1g"],
-                                           "dir": os.path.join(tooldir, "share", "java", "snpeff")}}}
-        raw_version = programs.java_versioner("snpeff", "snpEff",
-                                              stdout_flag="snpEff version SnpEff")(config)
+        raw_version = ""
     snpeff_version = "".join([x for x in str(raw_version)
                               if x in set(string.digits + ".")])
     assert snpeff_version, "Did not find snpEff version information"
@@ -253,18 +250,12 @@ def get_snpeff_files(data):
         return {}
 
 def get_cmd(cmd_name, datadir, config):
-    """Retrieve snpEff base command line, handling command line and jar based installs.
+    """Retrieve snpEff base command line.
     """
     resources = config_utils.get_resources("snpeff", config)
     memory = " ".join(resources.get("jvm_opts", ["-Xms750m", "-Xmx5g"]))
-    try:
-        snpeff = config_utils.get_program("snpEff", config)
-        cmd = "{snpeff} {memory} {cmd_name} -dataDir {datadir}"
-    except config_utils.CmdNotFound:
-        snpeff_jar = config_utils.get_jar("snpEff",
-                                          config_utils.get_program("snpeff", config, "dir"))
-        config_file = "%s.config" % os.path.splitext(snpeff_jar)[0]
-        cmd = "java {memory} -jar {snpeff_jar} {cmd_name} -c {config_file} -dataDir {datadir}"
+    snpeff = config_utils.get_program("snpEff", config)
+    cmd = "{snpeff} {memory} {cmd_name} -dataDir {datadir}"
     return cmd.format(**locals())
 
 def _run_snpeff(snp_in, out_format, data):
