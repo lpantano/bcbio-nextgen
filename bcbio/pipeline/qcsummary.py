@@ -19,6 +19,7 @@ try:
 except ImportError:
     plt = None
 import pysam
+import pybedtools
 import toolz as tz
 
 from bcbio import bam, utils
@@ -98,9 +99,10 @@ def _run_qc_tools(bam_file, data):
     metrics = {}
     to_run = [("fastqc", _run_fastqc)]
     if data["analysis"].lower().startswith("rna-seq"):
-        to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
-#        to_run.append(("coverage", _run_gene_coverage))
-        to_run.append(("complexity", _run_complexity))
+        # to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
+        # to_run.append(("coverage", _run_gene_coverage))
+        # to_run.append(("complexity", _run_complexity))
+        to_run.append(("qualimap", _rnaseq_qualimap))
     elif data["analysis"].lower().startswith("chip-seq"):
         to_run.append(["bamtools", _run_bamtools_stats])
     else:
@@ -124,6 +126,10 @@ def _run_qc_tools(bam_file, data):
                                              ("config", "algorithm",
                                               "quality_format"),
                                              "standard").lower()
+    # ds_bam = bam_file.replace(".bam", "-downsample.bam")
+    # if utils.file_exists(ds_bam):
+    #    shutil.remove(ds_bam)
+    #    shutil.remove(ds_bam + ".bai")
     return {"qc": qc_dir, "metrics": metrics}
 
 # ## Generate project level QC summary for quickly assessing large projects
@@ -386,6 +392,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
                   if data.get("analysis", "").lower() not in ["standard"]
                   else None)
         bam_file = ds_bam if ds_bam else bam_file
+        print bam_file
         fastqc_name = os.path.splitext(os.path.basename(bam_file))[0]
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
@@ -405,8 +412,8 @@ def _run_fastqc(bam_file, data, fastqc_out):
                     if os.path.exists(fastqc_out):
                         shutil.rmtree(fastqc_out)
                     shutil.move(tx_fastqc_out, fastqc_out)
-        if ds_bam and os.path.exists(ds_bam):
-            os.remove(ds_bam)
+        # if ds_bam and os.path.exists(ds_bam):
+        #    os.remove(ds_bam)
     parser = FastQCParser(fastqc_out)
     stats = parser.get_fastqc_summary()
     return stats
@@ -438,8 +445,11 @@ def _run_complexity(bam_file, data, out_dir):
 # ## Qualimap
 
 def _parse_num_pct(k, v):
-    num, pct = v.split(" / ")
-    return {k: num.replace(",", "").strip(), "%s pct" % k: pct.strip()}
+    if v.find("/") > -1:
+        num, pct = v.split(" / ")
+        return {k: num.replace(",", "").strip(), "%s pct" % k: pct.strip()}
+    else:
+        return {k: v.replace(",", "").strip()}
 
 def _parse_qualimap_globals(table):
     """Retrieve metrics of interest from globals table.
@@ -536,6 +546,72 @@ def _run_qualimap(bam_file, data, out_dir):
         do.run(cmd.format(**locals()), "Qualimap: %s" % data["name"][-1])
     return _parse_qualimap_metrics(report_file)
 
+# ## rnaseq qualimap
+
+def _detect_rRNA(bam_file, rRNA_file):
+    """
+    Calculate rRNA
+    """
+    ds_bam = bam_file.replace(".bam", "-downsample.bam")
+    if ds_bam:
+        bam_file = ds_bam
+    # bam = pybedtools.BedTool(bam_file)
+    # rna = pybedtools.BedTool(rRNA_file)
+    # rRNA_cov = bam.coverage(rna)
+
+def _parse_qualimap_rnaseq(table):
+    """
+    Retrieve metrics of interest from globals table.
+    """
+    out = {}
+    for row in table.xpath("table/tr"):
+        col, val = [x.text for x in row.xpath("td")]
+        out.update(_parse_num_pct(col.replace(":", "").strip(), val.replace("%", "")))
+    return out
+
+def _parse_rnaseq_qualimap_metrics(report_file):
+    """Extract useful metrics from the qualimap HTML report file.
+    """
+    out = {}
+    parsers = ["Reads alignment", "Reads genomic origin", "Transcript coverage profile"]
+    root = lxml.html.parse(report_file).getroot()
+    for table in root.xpath("//div[@class='table-summary']"):
+        header = table.xpath("h3")[0].text
+        if header in parsers:
+            print header
+            out.update(_parse_qualimap_rnaseq(table))
+    return out
+
+def _rnaseq_qualimap(bam_file, data, out_dir):
+    """
+    Run qualimap for a rnaseq bam file and parse results
+    """
+    report_file = os.path.join(out_dir, "qualimapReport.html")
+    config = data["config"]
+    # genome_dir = os.path.dirname(os.path.dirname(data["sam_ref"]))
+    gtf_file = dd.get_gtf_file(data)
+    rRNA_gtf = os.path.join(os.path.dirname(gtf_file), "rRNA.gtf")
+    single_end = not bam.is_paired(bam_file)
+    if not utils.file_exists(report_file):
+        utils.safe_makedir(out_dir)
+        bam.index(bam_file, config)
+        # rna_file = config_utils.get_rRNA_sequence(genome_dir)
+        cmd = _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end)
+        do.run(cmd, "Qualimap for {}".format(data["name"][-1]))
+    _detect_rRNA(bam_file, rRNA_gtf)
+    metrics = _parse_rnaseq_qualimap_metrics(report_file)
+    return metrics
+
+def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end):
+    """
+    Create command lines for qualimap
+    """
+    resources = config_utils.get_resources("qualimap", config)
+    mem = resources.get("mem", "6G")
+    qualimap = config_utils.get_program("qualimap", config)
+    cmd = ("{qualimap} rnaseq -outdir {out_dir} -a proportional -bam {bam_file} -gtf {gtf_file} --java-mem-size={mem}").format(**locals())
+    return cmd
+
 # ## Lightweight QC approaches
 
 def _parse_bamtools_stats(stats_file):
@@ -575,7 +651,7 @@ def _run_bamtools_stats(bam_file, data, out_dir):
             do.run(cmd.format(**locals()), "bamtools stats", data)
     return _parse_bamtools_stats(stats_file)
 
-## Variant statistics from gemini
+# ## Variant statistics from gemini
 
 def _run_gemini_stats(bam_file, data, out_dir):
     """Retrieve high level variant statistics from Gemini.
@@ -611,7 +687,7 @@ def _run_gemini_stats(bam_file, data, out_dir):
     return out
 
 
-## qsignature
+# ## qsignature
 
 def _run_qsignature_generator(bam_file, data, out_dir):
     """ Run SignatureGenerator to create normalize vcf that later will be input of qsignature_summary
