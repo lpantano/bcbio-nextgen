@@ -19,9 +19,9 @@ try:
 except ImportError:
     plt = None
 import pysam
-import pybedtools
 import toolz as tz
 
+from bcbio import broad
 from bcbio import bam, utils
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
 from bcbio.log import logger
@@ -282,6 +282,7 @@ class FastQCParser:
                         out.append(line.rstrip("\r\n"))
         return out
 
+
 def _run_gene_coverage(bam_file, data, out_dir):
     out_file = os.path.join(out_dir, "gene_coverage.pdf")
     ref_file = utils.get_in(data, ("genome_resources", "rnaseq", "transcripts"))
@@ -527,18 +528,20 @@ def _run_qualimap(bam_file, data, out_dir):
     """Run qualimap to assess alignment quality metrics.
     """
     report_file = os.path.join(out_dir, "qualimapReport.html")
+    config = data['config']
     if not os.path.exists(report_file):
         utils.safe_makedir(out_dir)
-        num_cores = data["config"]["algorithm"].get("num_cores", 1)
-        qualimap = config_utils.get_program("qualimap", data["config"])
-        resources = config_utils.get_resources("qualimap", data["config"])
+        num_cores = config["algorithm"].get("num_cores", 1)
+        qualimap = config_utils.get_program("qualimap", config)
+        resources = config_utils.get_resources("qualimap", config)
         max_mem = config_utils.adjust_memory(resources.get("memory", "1G"),
                                              num_cores)
         cmd = ("unset DISPLAY && {qualimap} bamqc -bam {bam_file} -outdir {out_dir} "
                "-nt {num_cores} --java-mem-size={max_mem}")
-        species = data["genome_resources"]["aliases"].get("ensembl", "").upper()
-        if species in ["HUMAN", "MOUSE"]:
-            cmd += " -gd {species}"
+        if "aliases" in data["genome_resources"]:
+            species = data["genome_resources"]["aliases"].get("ensembl", "").upper()
+            if species in ["HUMAN", "MOUSE"]:
+                cmd += " -gd {species}"
         regions = data["config"]["algorithm"].get("variant_regions")
         if regions:
             bed6_regions = _bed_to_bed6(regions, out_dir)
@@ -546,18 +549,68 @@ def _run_qualimap(bam_file, data, out_dir):
         do.run(cmd.format(**locals()), "Qualimap: %s" % data["name"][-1])
     return _parse_qualimap_metrics(report_file)
 
-# ## rnaseq qualimap
+# ## RNAseq Qualimap
 
-def _detect_rRNA(bam_file, rRNA_file):
+def _parse_metrics(metrics):
+    missing = set(["Genes Detected", "Transcripts Detected",
+                   "Mean Per Base Cov.", "Fragment Length Mean"])
+    to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
+                      "Intronic pct": "Intronic Rate", "Exonic pct": "Exonic Rate",
+                      "Not aligned": 0, 'Aligned to genes': 0, 'Non-unique alignment': 0,
+                      "No feature assigned": 0, "Duplication Rate of Mapped": 1,
+                      "rRNA": 1, "Ambiguou alignment": 0})
+    total = ["Not aligned", "Aligned to genes", "No feature assigned"]
+
+    out = {}
+    total_reads = sum([int(metrics[name]) for name in total])
+    out['rRNA rate'] = 1.0 * int(metrics["rRNA"]) / total_reads
+    out['Mapped'] = sum([int(metrics[name]) for name in total[1:]])
+    out['Mapping Rate'] = 1.0 * int(out['Mapped']) / total_reads
+    [out.update({name: 0}) for name in missing]
+
+    for name in to_change:
+        if not to_change[name]:
+            continue
+        if to_change[name] == 1:
+            out.update({name: float(metrics[name])})
+        else:
+            out.update({to_change[name]: float(metrics[name])})
+    return out
+
+def _detect_duplicates(bam_file, out_dir, config):
     """
-    Calculate rRNA
+    Detect duplicates metrics with Picard
     """
-    ds_bam = bam_file.replace(".bam", "-downsample.bam")
-    if ds_bam:
-        bam_file = ds_bam
-    # bam = pybedtools.BedTool(bam_file)
-    # rna = pybedtools.BedTool(rRNA_file)
-    # rRNA_cov = bam.coverage(rna)
+    out_file = os.path.join(out_dir, "dup_metrics")
+    if not utils.file_exists(out_file):
+        broad_runner = broad.runner_from_config(config)
+        (dup_align_bam, metrics_file) = broad_runner.run_fn("picard_mark_duplicates", bam_file, remove_dups=True)
+        shutil.move(metrics_file, out_file)
+    metrics = []
+    with open(out_file) as in_handle:
+        reader = csv.reader(in_handle, dialect="excel-tab")
+        for line in reader:
+            if line and not line[0].startswith("#"):
+                metrics.append(line)
+    metrics = dict(zip(metrics[0], metrics[1]))
+    return {"Duplication Rate of Mapped": metrics["PERCENT_DUPLICATION"]}
+
+def _detect_rRNA(config, bam_file, rRNA_file, out_dir, single_end):
+    """
+    Calculate rRNA with qualimap
+    """
+    if not utils.file_exists(rRNA_file):
+        return {'rRNA': 0}
+    out_file = os.path.join(out_dir, "rRNA", "qualimapReport.html")
+    if not utils.file_exists(out_file):
+        with tx_tmpdir() as tmp_dir:
+            if os.path.exists(os.path.join(out_dir, "rRNA")):
+                shutil.rmtree(os.path.join(out_dir, "rRNA"))
+            cmd = _rnaseq_qualimap_cmd(config, bam_file, tmp_dir, rRNA_file, single_end)
+            do.run(cmd, "Qualimap for rRNA in")
+            shutil.copytree(tmp_dir, os.path.join(out_dir, "rRNA"))
+    metrics = _parse_rnaseq_qualimap_metrics(out_file)
+    return {'rRNA': metrics['Aligned to genes']}
 
 def _parse_qualimap_rnaseq(table):
     """
@@ -578,7 +631,6 @@ def _parse_rnaseq_qualimap_metrics(report_file):
     for table in root.xpath("//div[@class='table-summary']"):
         header = table.xpath("h3")[0].text
         if header in parsers:
-            print header
             out.update(_parse_qualimap_rnaseq(table))
     return out
 
@@ -598,18 +650,26 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
         # rna_file = config_utils.get_rRNA_sequence(genome_dir)
         cmd = _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end)
         do.run(cmd, "Qualimap for {}".format(data["name"][-1]))
-    _detect_rRNA(bam_file, rRNA_gtf)
     metrics = _parse_rnaseq_qualimap_metrics(report_file)
+    # metrics_bam = _run_qualimap(bam_file, data, os.path.join(out_dir, "bam"))
+    # print metrics_bam
+    metrics.update(_detect_duplicates(bam_file, out_dir, config))
+    metrics.update(_detect_rRNA(config, bam_file, rRNA_gtf, out_dir, single_end))
+    metrics = _parse_metrics(metrics)
+    print metrics
     return metrics
 
-def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end):
+def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file=None, single_end=None):
     """
     Create command lines for qualimap
     """
-    resources = config_utils.get_resources("qualimap", config)
-    mem = resources.get("mem", "6G")
+    num_cores = config["algorithm"].get("num_cores", 1)
     qualimap = config_utils.get_program("qualimap", config)
-    cmd = ("{qualimap} rnaseq -outdir {out_dir} -a proportional -bam {bam_file} -gtf {gtf_file} --java-mem-size={mem}").format(**locals())
+    resources = config_utils.get_resources("qualimap", config)
+    max_mem = config_utils.adjust_memory(resources.get("memory", "1G"),
+                                         num_cores)
+    cmd = ("unset DISPLAY && {qualimap} rnaseq -outdir {out_dir} -a proportional -bam {bam_file} "
+           "-gtf {gtf_file} --java-mem-size={max_mem}").format(**locals())
     return cmd
 
 # ## Lightweight QC approaches
