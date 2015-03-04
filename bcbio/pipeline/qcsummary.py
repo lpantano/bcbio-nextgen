@@ -553,11 +553,12 @@ def _run_qualimap(bam_file, data, out_dir):
 
 def _parse_metrics(metrics):
     missing = set(["Genes Detected", "Transcripts Detected",
-                   "Mean Per Base Cov.", "Fragment Length Mean"])
+                   "Mean Per Base Cov."])
     to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
                       "Intronic pct": "Intronic Rate", "Exonic pct": "Exonic Rate",
                       "Not aligned": 0, 'Aligned to genes': 0, 'Non-unique alignment': 0,
                       "No feature assigned": 0, "Duplication Rate of Mapped": 1,
+                      "Fragment Length Mean": 1,
                       "rRNA": 1, "Ambiguou alignment": 0})
     total = ["Not aligned", "Aligned to genes", "No feature assigned"]
 
@@ -655,6 +656,7 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
     # print metrics_bam
     metrics.update(_detect_duplicates(bam_file, out_dir, config))
     metrics.update(_detect_rRNA(config, bam_file, rRNA_gtf, out_dir, single_end))
+    metrics.update({"Fragment Length Mean": bam.estimate_fragment_size(bam_file)})
     metrics = _parse_metrics(metrics)
     print metrics
     return metrics
