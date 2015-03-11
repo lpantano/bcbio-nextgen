@@ -554,6 +554,7 @@ def _run_qualimap(bam_file, data, out_dir):
 def _parse_metrics(metrics):
     missing = set(["Genes Detected", "Transcripts Detected",
                    "Mean Per Base Cov."])
+    correct = set(["Intergenic pct", "Intronic pct", "Exonic pct"])
     to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
                       "Intronic pct": "Intronic Rate", "Exonic pct": "Exonic Rate",
                       "Not aligned": 0, 'Aligned to genes': 0, 'Non-unique alignment': 0,
@@ -568,6 +569,7 @@ def _parse_metrics(metrics):
     out['Mapped'] = sum([int(metrics[name]) for name in total[1:]])
     out['Mapping Rate'] = 1.0 * int(out['Mapped']) / total_reads
     [out.update({name: 0}) for name in missing]
+    [metrics.update({name: 1.0 * float(metrics[name]) / 100}) for name in correct]
 
     for name in to_change:
         if not to_change[name]:
@@ -668,7 +670,7 @@ def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file=None, single_end=No
     num_cores = config["algorithm"].get("num_cores", 1)
     qualimap = config_utils.get_program("qualimap", config)
     resources = config_utils.get_resources("qualimap", config)
-    max_mem = config_utils.adjust_memory(resources.get("memory", "1G"),
+    max_mem = config_utils.adjust_memory(resources.get("memory", "4G"),
                                          num_cores)
     cmd = ("unset DISPLAY && {qualimap} rnaseq -outdir {out_dir} -a proportional -bam {bam_file} "
            "-gtf {gtf_file} --java-mem-size={max_mem}").format(**locals())
