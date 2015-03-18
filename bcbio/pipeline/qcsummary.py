@@ -598,22 +598,51 @@ def _detect_duplicates(bam_file, out_dir, config):
     metrics = dict(zip(metrics[0], metrics[1]))
     return {"Duplication Rate of Mapped": metrics["PERCENT_DUPLICATION"]}
 
-def _detect_rRNA(config, bam_file, rRNA_file, out_dir, single_end):
+def _transform_browser_coor(rRNA_interval, rRNA_coor):
     """
-    Calculate rRNA with qualimap
+    transform interval format to browser coord: chr:start-end
+    """
+    with open(rRNA_coor, 'w') as out_handle:
+        with open(rRNA_interval, 'r') as in_handle:
+            for line in in_handle:
+                if not line.startswith("@"):
+                    c, s, e = line.split("\t")[:3]
+                    out_handle.write(("{0}:{1}-{2}\n").format(c, s, e))
+
+def _detect_rRNA(config, bam_file, rRNA_file, ref_file, out_dir, single_end):
+    """
+    Calculate rRNA with gatk-framework
     """
     if not utils.file_exists(rRNA_file):
         return {'rRNA': 0}
-    out_file = os.path.join(out_dir, "rRNA", "qualimapReport.html")
+    out_file = os.path.join(out_dir, "rRNA.counts")
     if not utils.file_exists(out_file):
-        with tx_tmpdir() as tmp_dir:
-            if os.path.exists(os.path.join(out_dir, "rRNA")):
-                shutil.rmtree(os.path.join(out_dir, "rRNA"))
-            cmd = _rnaseq_qualimap_cmd(config, bam_file, tmp_dir, rRNA_file, single_end)
-            do.run(cmd, "Qualimap for rRNA in")
-            shutil.copytree(tmp_dir, os.path.join(out_dir, "rRNA"))
-    metrics = _parse_rnaseq_qualimap_metrics(out_file)
-    return {'rRNA': metrics['Aligned to genes']}
+        out_file = _count_rRNA_reads(bam_file, out_file, ref_file, rRNA_file, single_end, config)
+    with open(out_file) as in_handle:
+        for line in in_handle:
+            if line.find("CountReads counted") > -1:
+                rRNA_reads = line.split()[6]
+                break
+    return {'rRNA': rRNA_reads}
+
+def _count_rRNA_reads(in_bam, out_file, ref_file, rRNA_interval, single_end, config):
+    """Use GATK counter to count reads in rRNA genes
+    """
+    bam.index(in_bam, config)
+    if not utils.file_exists(out_file):
+        with file_transaction(out_file) as tx_out_file:
+            rRNA_coor = os.path.join(os.path.dirname(out_file), "rRNA.list")
+            _transform_browser_coor(rRNA_interval, rRNA_coor)
+            params = ["-T", "CountReads",
+                      "-R", ref_file,
+                      "-I", in_bam,
+                      "-log", tx_out_file,
+                      "-L", rRNA_coor,
+                      "--filter_reads_with_N_cigar"]
+            jvm_opts = broad.get_gatk_framework_opts(config)
+            cmd = [config_utils.get_program("gatk-framework", config)] + jvm_opts + params
+            do.run(cmd, "counts rRNA for %s" % in_bam)
+        return out_file
 
 def _parse_qualimap_rnaseq(table):
     """
@@ -645,7 +674,8 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
     config = data["config"]
     # genome_dir = os.path.dirname(os.path.dirname(data["sam_ref"]))
     gtf_file = dd.get_gtf_file(data)
-    rRNA_gtf = os.path.join(os.path.dirname(gtf_file), "rRNA.gtf")
+    ref_file = dd.get_ref_file(data)
+    rRNA_gtf = os.path.join(os.path.dirname(gtf_file), "rRNA.interval_list")
     single_end = not bam.is_paired(bam_file)
     if not utils.file_exists(report_file):
         utils.safe_makedir(out_dir)
@@ -657,10 +687,9 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
     # metrics_bam = _run_qualimap(bam_file, data, os.path.join(out_dir, "bam"))
     # print metrics_bam
     metrics.update(_detect_duplicates(bam_file, out_dir, config))
-    metrics.update(_detect_rRNA(config, bam_file, rRNA_gtf, out_dir, single_end))
+    metrics.update(_detect_rRNA(config, bam_file, rRNA_gtf, ref_file, out_dir, single_end))
     metrics.update({"Fragment Length Mean": bam.estimate_fragment_size(bam_file)})
     metrics = _parse_metrics(metrics)
-    print metrics
     return metrics
 
 def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file=None, single_end=None):
