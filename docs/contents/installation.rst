@@ -40,8 +40,8 @@ requirements:
 
 - Python 2.6 or 2.7, with the development libraries
   installed (the python-dev or python-devel packages).
-- Compilers: Recent versions of gcc and g++. gcc 4.8.x is well tested,
-  although other versions should work fine.
+- Compilers: Recent versions of gcc, g++ and gfortran. gcc 4.8.x
+  is well tested, although other versions should work.
 - The git version control system (http://git-scm.com/).
 - wget for file retrieval (https://www.gnu.org/software/wget/)
 - unzip
@@ -80,7 +80,10 @@ This requires the following additional system requirements to be in place:
 - Java 1.7
 - Ruby (including libraries and irb. On CentOS these are separate packages:
   ``ruby-libs`` and ``ruby-irb``.)
-- R with Rscript (currently optional, but increasingly used in the pipeline)
+- R with Rscript. We test libraries with the most recent R releases as most of
+  the Bioconductor tools track this version. If installing from system packages,
+  also install the development packages (On Ubuntu: ``r-base r-base-dev``,
+  On CentOS: ``R-core R-core-devel R-java libRmath libRmath-devel``)
 - bzip2 (with development libraries)
 - curl (with development libraries)
 - curses (with development libraries)
@@ -261,18 +264,21 @@ use ``https://`` globally instead of ``git://``::
     $ git config --global url.https://github.com/.insteadOf git://github.com/
 
 
-ImportError: No module named conda.cli
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Having a PYTHONHOME or PYTHONPATH set can cause installation troubles,
-if you are seeing an error like the above, unsetting these two environment
-variables will help. Fix that with::
+ImportErrors
+~~~~~~~~~~~~
+Import errors with tracebacks containing Python libraries outside of the bcbio
+distribution (``/path/to/bcbio/anaconda``) are often due to other conflicting
+Python installations. bcbio tries to isolate itself as much as possible but
+external libraries can get included during installation due to the
+PYTHONHOME or PYTHONPATH environmental variation or local site libraries.
+These commands will temporary unset those to get bcbio installed, after which it
+should ignore them automatically::
 
     $ unset PYTHONHOME
     $ unset PYTHONPATH
+    $ export PYTHONNOUSERSITE=1
 
-Other import errors
-~~~~~~~~~~~~~~~~~~~
-Having a .pydistutils.cfg file in your home directory can mess with
+Finally, having a .pydistutils.cfg file in your home directory can mess with
 where the libraries get installed. If you have this file in your
 home directory, temporarily renaming it to something else may fix
 your installation issue.
