@@ -200,7 +200,7 @@ def _update_conda_packages():
     conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
     pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
-            "pip", "python-dateutil", "pysam", "pyvcf", "pyyaml", "pyzmq", "reportlab", "requests",
+            "pip", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml", "pyzmq", "reportlab", "requests",
             "scikit-learn", "scipy", "seaborn", "setuptools", "sqlalchemy", "statsmodels", "toolz", "tornado"]
     channels = ["-c", "https://conda.binstar.org/bcbio"]
     if os.path.exists(conda_bin):
@@ -442,8 +442,8 @@ def _install_gemini(tooldir, datadir, args):
         vurl = "https://raw.github.com/arq5x/gemini/master/requirements.txt"
         r = requests.get(vurl, verify=False)
         for line in r.text.split():
-            if line.startswith("gemini=="):
-                latest_version = line.split("==")[-1]
+            if line.startswith(("gemini=", "gemini>")):
+                latest_version = line.split("=")[-1].split(">")[-1]
         cur_version = subprocess.check_output([gemini, "-v"], stderr=subprocess.STDOUT).strip().split()[-1]
         if LooseVersion(latest_version) > LooseVersion(cur_version):
             subprocess.check_call([gemini, "update"])

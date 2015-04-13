@@ -15,6 +15,27 @@ from bcbio.bam.coverage import plot_multiple_regions_coverage
 from bcbio.bed import concat
 from bcbio.utils import file_exists, safe_makedir
 
+def breakpoints_by_caller(bed_files):
+    """
+    given a list of BED files of the form
+    chrom start end caller
+    return a BedTool of breakpoints as each line with
+    the fourth column the caller with evidence for the breakpoint
+    chr1 1 10 caller1 -> chr1 1 1 caller1
+    chr1 1 20 caller2    chr1 1 1 caller2
+                         chr1 10 10 caller1
+                         chr1 20 20 caller2
+    """
+    merged = concat(bed_files)
+    if not merged:
+        return []
+    grouped_start = merged.groupby(g=[1, 2, 2], c=4, o=["distinct"])
+    grouped_end = merged.groupby(g=[1, 3, 3], c=4, o=["distinct"])
+    together = concat([grouped_start, grouped_end])
+    final = together.expand(c=4)
+    final = final.sort()
+    return final
+
 def _merge_sv_calls(bed_files, out_file, data):
     """
     merge a set of structural variant BED files and return a bedtools object
@@ -25,6 +46,16 @@ def _merge_sv_calls(bed_files, out_file, data):
                 merged = concat(bed_files)
                 merged = merged.sort().merge().saveas(tx_out_file)
         return pybedtools.BedTool(out_file)
+
+def _get_sv_callers(items):
+    """
+    return a sorted list of all of the structural variant callers run
+    """
+    callers = []
+    for data in items:
+        for sv in data.get("sv", []):
+            callers.append(sv["variantcaller"])
+    return list(set([x for x in callers if x != "sv-ensemble"])).sort()
 
 def _get_ensemble_bed_files(items):
     """
@@ -56,17 +87,21 @@ def _add_regional_coverage_plot(items, plot):
 def _prioritize_plot_regions(region_bt, data):
     """Avoid plotting large numbers of regions due to speed issues. Prioritize most interesting.
 
-    XXX For now, just removes larger regions. Longer term we'll insert biology-based
-    prioritization.
+    XXX For now, just removes larger regions and avoid plotting thousands of regions.
+    Longer term we'll insert biology-based prioritization.
     """
+    max_plots = 1000
     max_size = 100 * 1000 # 100kb
     out_file = "%s-priority%s" % utils.splitext_plus(region_bt.fn)
+    num_plots = 0
     if not utils.file_uptodate(out_file, region_bt.fn):
         with file_transaction(data, out_file) as tx_out_file:
             with open(tx_out_file, "w") as out_handle:
                 for r in region_bt:
                     if r.stop - r.start < max_size:
-                        out_handle.write(str(r))
+                        if num_plots < max_plots:
+                            num_plots += 1
+                            out_handle.write(str(r))
     return out_file
 
 def by_regions(items):
@@ -80,9 +115,12 @@ def by_regions(items):
     if file_exists(out_file):
         items = _add_regional_coverage_plot(items, out_file)
     else:
-        merged = _merge_sv_calls(_get_ensemble_bed_files(items), merged_file, items[0])
+        bed_files = _get_ensemble_bed_files(items)
+        merged = _merge_sv_calls(bed_files, merged_file, items[0])
+        breakpoints = breakpoints_by_caller(bed_files)
         if merged:
             priority_merged = _prioritize_plot_regions(merged, items[0])
-            out_file = plot_multiple_regions_coverage(items, out_file, priority_merged)
+            out_file = plot_multiple_regions_coverage(items, out_file,
+                                                      priority_merged, breakpoints)
             items = _add_regional_coverage_plot(items, out_file)
     return items
