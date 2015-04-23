@@ -5,12 +5,20 @@
 - Update vt decompose to handle additional multi-allelic adjustments including
   all format attributes, providing full support for new GEMINI changes. Thanks
   to Brent Pedersen and Adrian Tan.
+- Add `default` configuration target to `bcbio_system.yaml` reducing the need
+  to set program specific arguments for everything.
+- Ensure `resources` specified in input YAML get passed to global system
+  configuration for making parallelization decisions. Thanks to Miika Ahdesmaki.
 - Run upload process on distributed machines, allowing upload to S3 on AWS to take
   advantage of machines with multiple cores. Thanks to Lorena Pantano.
 - Re-write interactions with external object stores like S3 to be more general
   and incorporate multiple regions and future support for non-S3 storage.
+- Scale local jobs by total memory usage when memory constrains resource usage
+  jinstead of cores. Thanks to Sven-Eric Schelhorn and Lorena Pantano.
 - Disambiguation: improve parallelization by disambiguating on split alignment
   parts prior to merging. Thanks to Sven-Eric Schelhorn.
+- Disambiguation: ensure ambiguous and other organism reads are sorted, merged
+  and passed to final upload directory. Thanks to Sven-Eric Schelhorn.
 - Fix problem with sambamba name sorting not being compatible with samtools.
   Thanks to Sven-Eric Schelhorn.
 - FreeBayes: update to latest version (0.9.21-7) with validation

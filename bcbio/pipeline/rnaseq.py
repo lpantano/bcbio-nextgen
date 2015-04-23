@@ -1,6 +1,6 @@
 import os
 from bcbio.rnaseq import (featureCounts, cufflinks, oncofuse, count, dexseq,
-                          express, variation, gtf)
+                          express, variation, gtf, stringtie)
 from bcbio.ngsalign import bwa, bowtie2
 import bcbio.pipeline.datadict as dd
 from bcbio.utils import filter_missing
@@ -42,6 +42,7 @@ def quantitate_expression_parallel(samples, run_parallel):
     """
     samples = run_parallel("generate_transcript_counts", samples)
     samples = run_parallel("run_cufflinks", samples)
+    #samples = run_parallel("run_stringtie_expression", samples)
     return samples
 
 def quantitate_expression_noparallel(samples, run_parallel):
@@ -67,6 +68,11 @@ def generate_transcript_counts(data):
         logger.info("RSEM was flagged to run, but the transcriptome BAM file "
                     "was not found. Aligning to the transcriptome with bowtie2.")
         data = bowtie2.align_transcriptome(file1, file2, ref_file, data)
+    return [[data]]
+
+def run_stringtie_expression(data):
+    """Calculate transcript and gene level FPKM with Stringtie"""
+    data = stringtie.run_stringtie_expression(data)
     return [[data]]
 
 def run_dexseq(data):
@@ -173,7 +179,6 @@ def combine_files(samples):
     fpkm_isoform_combined = count.combine_count_files(isoform_files,
                                                       fpkm_isoform_combined_file,
                                                       ".isoform.fpkm")
-
     # combine DEXseq files
     dexseq_combined_file = os.path.splitext(combined)[0] + ".dexseq"
     to_combine_dexseq = filter_missing([dd.get_dexseq_counts(data[0]) for data in samples])
@@ -190,7 +195,7 @@ def combine_files(samples):
         if fpkm_combined:
             data = dd.set_combined_fpkm(data, fpkm_combined)
         if fpkm_isoform_combined:
-            data = dd.set_combined_fpkm_isoform(data, fpkm_combined)
+            data = dd.set_combined_fpkm_isoform(data, fpkm_isoform_combined)
         if express_counts_combined:
             data = dd.set_express_counts(data, express_counts_combined['counts'])
             data = dd.set_express_tpm(data, express_counts_combined['tpm'])

@@ -83,6 +83,10 @@ def run_cufflinks(*args):
     return rnaseq.run_cufflinks(*args)
 
 @utils.map_wrap
+def run_stringtie_expression(*args):
+    return rnaseq.run_stringtie_expression(*args)
+
+@utils.map_wrap
 def run_express(*args):
     return rnaseq.run_express(*args)
 
@@ -161,6 +165,10 @@ def run_disambiguate(*args):
 @utils.map_wrap
 def disambiguate_split(*args):
     return disambiguate.split(*args)
+
+@utils.map_wrap
+def disambiguate_merge_extras(*args):
+    return disambiguate.merge_extras(*args)
 
 @utils.map_wrap
 def clean_chipseq_alignment(*args):
