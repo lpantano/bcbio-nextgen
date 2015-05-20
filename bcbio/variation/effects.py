@@ -9,7 +9,6 @@ import os
 import glob
 import shutil
 import string
-import subprocess
 
 import toolz as tz
 import yaml
@@ -25,15 +24,18 @@ from bcbio.variation import vcfutils
 def add_to_vcf(in_file, data):
     effect_todo = get_type(data)
     if effect_todo:
+        stats = None
         if effect_todo == "snpeff":
-            ann_vrn_file = snpeff_effects(in_file, data)
+            ann_vrn_file, stats_file = snpeff_effects(in_file, data)
+            if utils.file_exists(stats_file):
+                stats = {"effects-stats": stats_file}
         elif effect_todo == "vep":
             ann_vrn_file = run_vep(in_file, data)
         else:
             raise ValueError("Unexpected variant effects configuration: %s" % effect_todo)
         if ann_vrn_file:
-            return ann_vrn_file
-    return None
+            return ann_vrn_file, stats
+    return None, None
 
 def get_type(data):
     """Retrieve the type of effects calculation to do.
@@ -43,28 +45,17 @@ def get_type(data):
 
 # ## Ensembl VEP
 
-def vep_version(config):
-    try:
-        vep = config_utils.get_program("variant_effect_predictor.pl", config)
-        help_str = subprocess.check_output([vep, "--help"])
-        for line in help_str.split("\n"):
-            if line.startswith("version"):
-                return line.split()[-1].strip()
-        return None
-    except config_utils.CmdNotFound:
-        return None
-        return False
-
 def _special_dbkey_maps(dbkey, ref_file):
     """Avoid duplicate VEP information for databases with chromosome differences like hg19/GRCh37.
     """
-    remaps = {"hg19": "GRCh37"}
+    remaps = {"hg19": "GRCh37",
+              "hg38-noalt": "hg38"}
     if dbkey in remaps:
         base_dir = os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir))
         vep_dir = os.path.normpath(os.path.join(base_dir, "vep"))
         other_dir = os.path.relpath(os.path.normpath(os.path.join(base_dir, os.pardir, remaps[dbkey], "vep")),
                                     base_dir)
-        if os.path.exists(other_dir):
+        if os.path.exists(os.path.join(base_dir, other_dir)):
             if not os.path.lexists(vep_dir):
                 os.symlink(other_dir, vep_dir)
             return vep_dir
@@ -81,32 +72,30 @@ def prep_vep_cache(dbkey, ref_file, tooldir=None, config=None):
     if tooldir:
         os.environ["PERL5LIB"] = "{t}/lib/perl5:{t}/lib/perl5/site_perl:{l}".format(
             t=tooldir, l=os.environ.get("PERL5LIB", ""))
-    vepv = vep_version(config)
-    if os.path.exists(resource_file) and vepv:
+    if os.path.exists(resource_file):
         with open(resource_file) as in_handle:
             resources = yaml.load(in_handle)
         ensembl_name = tz.get_in(["aliases", "ensembl"], resources)
-        ensembl_version = tz.get_in(["aliases", "ensembl_version"], resources)
         symlink_dir = _special_dbkey_maps(dbkey, ref_file)
-        if symlink_dir:
-            return symlink_dir, ensembl_name
+        if symlink_dir and ensembl_name:
+            species, vepv = ensembl_name.split("_vep_")
+            return symlink_dir, species
         elif ensembl_name:
+            species, vepv = ensembl_name.split("_vep_")
             vep_dir = utils.safe_makedir(os.path.normpath(os.path.join(
                 os.path.dirname(os.path.dirname(ref_file)), "vep")))
-            out_dir = os.path.join(vep_dir, ensembl_name, vepv)
+            out_dir = os.path.join(vep_dir, species, vepv)
             if not os.path.exists(out_dir):
                 cmd = ["vep_install.pl", "-a", "c", "-s", ensembl_name,
                        "-c", vep_dir]
-                if ensembl_version:
-                    cmd += ["-v", ensembl_version]
                 do.run(cmd, "Prepare VEP directory for %s" % ensembl_name)
-                cmd = ["vep_convert_cache.pl", "-species", ensembl_name, "-version", vepv,
+                cmd = ["vep_convert_cache.pl", "-species", species, "-version", vepv,
                        "-d", vep_dir]
                 do.run(cmd, "Convert VEP cache to tabix %s" % ensembl_name)
             tmp_dir = os.path.join(vep_dir, "tmp")
             if os.path.exists(tmp_dir):
                 shutil.rmtree(tmp_dir)
-            return vep_dir, ensembl_name
+            return vep_dir, species
     return None, None
 
 def run_vep(in_file, data):
@@ -130,7 +119,7 @@ def run_vep(in_file, data):
                               "EXON", "PolyPhen", "SIFT", "Protein_position", "BIOTYPE", "CANONICAL", "CCDS"]
                 resources = config_utils.get_resources("vep", data["config"])
                 extra_args = [str(x) for x in resources.get("options", [])]
-                cmd = [vep, "--vcf", "-o", "stdout"] + fork_args + extra_args + \
+                cmd = [vep, "--vcf", "-o", "stdout", "-i", in_file] + fork_args + extra_args + \
                       ["--species", ensembl_name,
                        "--no_stats",
                        "--cache", "--offline", "--dir", vep_dir,
@@ -152,7 +141,11 @@ def run_vep(in_file, data):
                     #  variant.
 
                     cmd += ["--pick"]
-                cmd = "gunzip -c %s | %s | bgzip -c > %s" % (in_file, " ".join(cmd), tx_out_file)
+
+                    # TODO investigate hgvs reporting but requires indexing the reference file
+                    # cmd += ["--hgvs", "--shift-hgvs", "--fasta", dd.get_ref_file(data)]
+                # Remove empty fields (';;') which can cause parsing errors downstream
+                cmd = "%s | sed '/^#/! s/;;/;/g' | bgzip -c > %s" % (" ".join(cmd), tx_out_file)
                 do.run(cmd, "Ensembl variant effect predictor", data)
     if utils.file_exists(out_file):
         vcfutils.bgzip_and_index(out_file, data["config"])
@@ -263,13 +256,14 @@ def _run_snpeff(snp_in, out_format, data):
     """
     snpeff_db, datadir = get_db(data)
     if not snpeff_db:
-        return None
+        return None, None
 
     assert os.path.exists(os.path.join(datadir, snpeff_db)), \
         "Did not find %s snpEff genome data in %s" % (snpeff_db, datadir)
     snpeff_cmd = get_cmd("eff", datadir, data["config"])
     ext = utils.splitext_plus(snp_in)[1] if out_format == "vcf" else ".tsv"
     out_file = "%s-effects%s" % (utils.splitext_plus(snp_in)[0], ext)
+    stats_file = "%s-stats.html" % utils.splitext_plus(out_file)[0]
     if not utils.file_exists(out_file):
         config_args = " ".join(_snpeff_args_from_config(data))
         if ext.endswith(".gz"):
@@ -278,11 +272,11 @@ def _run_snpeff(snp_in, out_format, data):
             bgzip_cmd = ""
         with file_transaction(data, out_file) as tx_out_file:
             cmd = ("{snpeff_cmd} {config_args} -noLog -i vcf -o {out_format} "
-                   "{snpeff_db} {snp_in} {bgzip_cmd} > {tx_out_file}")
+                   "-s {stats_file} {snpeff_db} {snp_in} {bgzip_cmd} > {tx_out_file}")
             do.run(cmd.format(**locals()), "snpEff effects", data)
     if ext.endswith(".gz"):
         out_file = vcfutils.bgzip_and_index(out_file, data["config"])
-    return out_file
+    return out_file, stats_file
 
 # ## back-compatibility
 

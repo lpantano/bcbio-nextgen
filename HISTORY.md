@@ -1,4 +1,33 @@
-## 0.8.8 (in progress)
+## 0.9.0 (in progress)
+
+- Single sample structural variant calling: corectly handle multiple variant
+  callers. Thanks to Sven-Eric Schelhorn.
+- Fix VEP/GEMINI incompatibility where empty fields are included in VCF output.
+- VarDict: restrict maximum region size within a BED file to 2Mb to avoid high
+  memory usage and failures for longer regions.
+- Include snpEff effects summary file in output directory when used for effects
+  prediction.
+
+## 0.8.9 (10 May 2015)
+
+- Upgrade variant effect predictor (VEP) to the latest Ensembl version (79) with
+  support for hg38. The latest VEP has better support for multiple versions
+  but incompatible database naming. This requires an update of tools and data in
+  a two step process. First `bcbio_nextgen.py upgrade -u stable --tools`
+  (or `-u development`) then `bcbio_nextgen.py upgrade --data`.
+- Improve de-duplication for split alignments. Do not sort/merge during splits,
+  and instead perform a global merge sort and de-duplication of the final set of
+  reads.
+- Initial support for new human genome build (hg38/GRCh38) including alternative
+  alleles. Usage is in place but still requires validation and additional testing.
+- Remove alternative alleles from downstream variant calling after using in alignment
+  to avoid issues with chromosome names like `HLA*`.
+- Enable installation of external conda-managed tools. Adds in builds for
+  heterogeneity analysis.
+- Clean up preparation process for multi-allelic inputs to GEMINI to avoid
+  needing to split/merge. Thanks to Sven-Eric Schelhorn.
+
+## 0.8.8 (29 April 2015)
 
 - Automatically calculate `coverage_interval` based on coverage calculations,
   avoiding need to set this directly in input configuration.
@@ -29,6 +58,9 @@
 - Better error checking for booleans in input configuration. Thanks to Daryl
   Waggott.
 - Implement qualimap for RNAseq QC metrics, but not active yet.
+- collect statistics graphing capabilities moved from bcbio-nextgen-vm, enabling
+  plotting of resource usage during runs. Thanks to John Morrissey and Lorena
+  Pantano.
 
 ## 0.8.7 (12 March 2015)
 

@@ -2,7 +2,7 @@ biopython>=1.61
 boto>=2.34.0
 Cython>=0.19
 ipython>=2.0.0
-ipython-cluster-helper>=0.4.1
+ipython-cluster-helper>=0.4.3
 Logbook>=0.6.0
 lxml>=3.3.5
 msgpack-python>=0.4.0
@@ -26,9 +26,9 @@ cnvkit>=0.3.4
 cutadapt==1.4.2
 cyvcf>=0.1.11
 fabric>=1.7.0
-gffutils>=0.8.2
+gffutils>=0.8.4rc1
 HTSeq >= 0.5.4p5
-joblib>=0.7.0d
+joblib>=0.8.4
 openpyxl>=1.6.1,<2.0.0
 path.py>=7.0
 psutil>=1.2.0
@@ -39,4 +39,4 @@ sh>=1.07
 tabulate>=0.7.3
 scikit-learn>=0.15.2
 seaborn>=0.5.0
-bcbio-nextgen==0.8.7
+bcbio-nextgen==0.8.9

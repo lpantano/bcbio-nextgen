@@ -90,10 +90,11 @@ def bootstrap_bcbionextgen(anaconda, args, remotes):
     return out
 
 def install_conda_pkgs(anaconda):
-    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "lxml",
+    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
-            "pip", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml", "pyzmq", "reportlab", "requests",
-            "scikit-learn", "scipy", "seaborn", "setuptools", "sqlalchemy", "statsmodels", "toolz", "tornado"]
+            "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
+            "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
+            "sqlalchemy", "statsmodels", "toolz", "tornado"]
     channels = ["-c", "https://conda.binstar.org/bcbio"]
     subprocess.check_call([anaconda["conda"], "install", "--yes", "numpy"])
     subprocess.check_call([anaconda["conda"], "install", "--yes"] + channels + pkgs)
@@ -237,7 +238,7 @@ if __name__ == "__main__":
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
                         action="append", default=[],
-                        choices=["GRCh37", "hg19", "hg38-noalt", "mm10", "mm9", "rn5",
+                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
                                  "canFam3", "dm3", "Zv9", "phix", "sacCer3",
                                  "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"])
     parser.add_argument("--aligners", help="Aligner indexes to download",
