@@ -69,3 +69,21 @@ the documentation.
 .. _Calculate and plot coverage:  https://github.com/chapmanb/bcbio-nextgen/issues/195#issuecomment-39071048
 .. _Another way: http://gettinggeneticsdone.blogspot.com/2014/03/visualize-coverage-exome-targeted-ngs-bedtools.html
 
+Resources usage
+===================
+
+If the nodes are monitoring resources with collectl <http://collectl.sourceforge.net/>`_. 
+bcbio_nextgen.py can use those files to plot CPU, memory, disk and network usage 
+during each step of a run. To prepare resources usage plots after finishing an 
+analysis, copy all collectl logs from the nodes used during the analysis to 
+the same folder (``collectl_logs``). Normally, these logs are under ``/var/log/collectl`` in each node. 
+bcbio needs only the logs from the nodes and the time when it ran  
+(``monitoring/collectl/yournodename-timestamp.raw.gz``). 
+
+
+The figures will be under ``monitoring/collectl`` folder after this command::
+
+    bcbio_nextgen.py graph log/bcbio-nextgen.log -r collectl_logs -o monitoring
+
+You can edit the steps showed in the figure by editing the lines containing the ``Timing`` word in ``bcbio-nextgen.log`.` 
+
