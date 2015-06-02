@@ -18,8 +18,8 @@ from bcbio.provenance import do
 @utils.memoize_outfile(stem=".groom")
 def groom(in_file, data, in_qual="illumina", out_dir=None, out_file=None):
     """
-    Grooms a FASTQ file from Illumina 1.3/1.5 quality scores into 
-    sanger format, if it is not already in that format. 
+    Grooms a FASTQ file from Illumina 1.3/1.5 quality scores into
+    sanger format, if it is not already in that format.
     """
     seqtk = config_utils.get_program("seqtk", data["config"])
     if in_qual == "fastq-sanger":
@@ -129,20 +129,24 @@ def combine_pairs(input_files):
                 continue #there is only 1 difference
             if (a[s[0]] in PAIR_FILE_IDENTIFIERS and
                   b[s[0]] in PAIR_FILE_IDENTIFIERS):
-
+                # if the 1/2 isn't the last digit before a separator, skip
+                # this skips stuff like 2P 2A, often denoting replicates, not
+                # read pairings
+                if len(b) > (s[0] + 1):
+                    if (b[s[0]+1] not in ("_", "-", ".")):
+                        continue
+                # if the 1/2 is not a separator or prefaced with R, skip
                 if b[s[0]- 1] in ("R", "_", "-", "."):
-
-                            used.add(in_file)
-                            used.add(comp_file)
-                            if b[s[0]] == "2":
-                                pairs.append([in_file, comp_file])
-                            else:
-                                pairs.append([comp_file, in_file])
-                            break
+                    used.add(in_file)
+                    used.add(comp_file)
+                    if b[s[0]] == "2":
+                        pairs.append([in_file, comp_file])
+                    else:
+                        pairs.append([comp_file, in_file])
+                    break
         if in_file not in used:
             pairs.append([in_file])
             used.add(in_file)
-
     return pairs
 
 def dif(a, b):

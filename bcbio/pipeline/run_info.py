@@ -24,7 +24,7 @@ from bcbio.variation.cortex import get_sample_name
 from bcbio.bam.fastq import open_fastq
 
 ALGORITHM_NOPATH_KEYS = ["variantcaller", "realign", "recalibrate",
-                         "phasing", "svcaller", "jointcaller", "tools_off", "mixup_check"]
+                         "phasing", "svcaller", "hetcaller", "jointcaller", "tools_off", "mixup_check"]
 
 def organize(dirs, config, run_info_yaml, sample_names):
     """Organize run information from a passed YAML file or the Galaxy API.
@@ -55,8 +55,12 @@ def organize(dirs, config, run_info_yaml, sample_names):
         # Create temporary directories and make absolute, expanding environmental variables
         tmp_dir = tz.get_in(["config", "resources", "tmp", "dir"], item)
         if tmp_dir:
-            tmp_dir = utils.safe_makedir(os.path.expandvars(tmp_dir))
-            item["config"]["resources"]["tmp"]["dir"] = genome.abs_file_paths(tmp_dir)
+            # if no environmental variables, make and normalize the directory
+            # otherwise we normalize later in distributed.transaction:
+            if os.path.expandvars(tmp_dir) == tmp_dir:
+                tmp_dir = utils.safe_makedir(os.path.expandvars(tmp_dir))
+                tmp_dir = genome.abs_file_paths(tmp_dir)
+            item["config"]["resources"]["tmp"]["dir"] = tmp_dir
         out.append(item)
     out = _add_provenance(out, dirs, config)
     return out
@@ -251,7 +255,7 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "quality_format", "write_summary", "merge_bamprep",
                       "coverage", "coverage_interval", "ploidy", "indelcaller",
                       "variantcaller", "jointcaller", "variant_regions",
-                      "effects", "mark_duplicates", "svcaller", "svvalidate",
+                      "effects", "mark_duplicates", "svcaller", "svvalidate", "sv_regions", "hetcaller",
                       "recalibrate", "realign", "phasing", "validate",
                       "validate_regions", "validate_genome_build",
                       "clinical_reporting", "nomap_split_size",
@@ -331,6 +335,9 @@ def _detect_fastq_format(in_file, MAX_RECORDS=1000):
                 break
             count += 1
             vals = [ord(c) for c in line.rstrip()]
+            # if there is a short sequence, skip it
+            if len(vals) < 20:
+                continue
             lmin = min(vals)
             lmax = max(vals)
             for encoding, (emin, emax) in ranges.items():
@@ -349,7 +356,7 @@ def _check_quality_format(items):
                      "illumina_1.8+": "standard",
                      "solexa": "solexa",
                      "sanger": "standard"}
-    fastq_extensions = ["fq.gz", "fastq.gz", ".fastq" ".fq"]
+    fastq_extensions = ["fq.gz", "fastq.gz", ".fastq", ".fq"]
 
     for item in items:
         specified_format = item["algorithm"].get("quality_format", "standard").lower()
@@ -566,13 +573,13 @@ def _add_algorithm_defaults(algorithm):
     defaults = {"archive": [],
                 "min_allele_fraction": 10.0,
                 "tools_off": []}
-    convert_to_list = set(["archive", "tools_off"])
+    convert_to_list = set(["archive", "tools_off", "hetcaller"])
     for k, v in defaults.items():
         if k not in algorithm:
             algorithm[k] = v
     for k, v in algorithm.items():
         if k in convert_to_list:
-            if not isinstance(v, (list, tuple)):
+            if v and not isinstance(v, (list, tuple)):
                 algorithm[k] = [v]
     return algorithm
 

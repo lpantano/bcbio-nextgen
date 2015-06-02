@@ -16,6 +16,7 @@ def _get_resource_programs(progs, algs):
     checks = {"gatk-vqsr": config_utils.use_vqsr,
               "snpeff": config_utils.use_snpeff,
               "bcbio-variation-recall": config_utils.use_bcbio_variation_recall}
+    parent_child = {"vardict": _parent_prefix("vardict")}
     out = set([])
     for p in progs:
         if p == "aligner":
@@ -24,6 +25,9 @@ def _get_resource_programs(progs, algs):
                 if aligner:
                     out.add(aligner)
         elif p == "variantcaller":
+            for key, fn in parent_child.items():
+                if fn(algs):
+                    out.add(key)
             for alg in algs:
                 vc = alg.get("variantcaller")
                 if vc:
@@ -38,6 +42,18 @@ def _get_resource_programs(progs, algs):
         else:
             out.add(p)
     return sorted(list(out))
+
+def _parent_prefix(prefix):
+    """Identify a parent prefix we should add to resources if present in a caller name.
+    """
+    def run(algs):
+        for alg in algs:
+            vcs = alg.get("variantcaller")
+            if vcs:
+                if not isinstance(vcs, (list, tuple)):
+                    vcs = [vcs]
+                return any(vc.startswith(prefix) for vc in vcs)
+    return run
 
 def _ensure_min_resources(progs, cores, memory, min_memory):
     """Ensure setting match minimum resources required for used programs.
@@ -163,6 +179,11 @@ def calculate(parallel, items, sysinfo, config, multiplier=1,
         cores_per_job, memory_per_job, mem_pct = _scale_cores_to_memory(cores_per_job,
                                                                         memory_per_core, sysinfo,
                                                                         system_memory)
+        # For local runs with multiple jobs and multiple cores, potentially scale jobs down
+        if num_jobs > 1 and parallel.get("type") == "local":
+            memory_per_core = float(memory_per_job) / cores_per_job
+            num_jobs, _ = _scale_jobs_to_memory(num_jobs, memory_per_core, sysinfo)
+
     # do not overschedule if we don't have extra items to process
     num_jobs = min(num_jobs, len(items) * multiplier)
     logger.debug("Configuring %d jobs to run, using %d cores each with %sg of "

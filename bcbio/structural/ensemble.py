@@ -61,7 +61,8 @@ def _cnvkit_to_bed(in_file, caller, out_file):
                 with open(tx_out_file, "w") as out_handle:
                     for line in in_handle:
                         chrom, start, end, sample, copyn = line.strip().split("\t")[:5]
-                        out_handle.write("\t".join([chrom, start, end, "cnv%s_%s" % (copyn, caller)])
+                        out_handle.write("\t".join([chrom, start, end,
+                                                    "cnv%s_%s" % (copyn.replace(",", ";"), caller)])
                                          + "\n")
     return out_file
 
@@ -121,28 +122,6 @@ def combine_bed_by_size(input_beds, sample, work_dir, data, delim=","):
             out_file = bedutils.combine(size_beds, out_file, data)
     return out_file
 
-def _limit_calls(in_file, highdepth_beds, data):
-    """Limit calls to avoid calling in problematic genomic regions.
-
-    - highdepth_beds -- high depth regions with reads in repeat regions.
-    """
-    import pybedtools
-    out_file = "%s-glimit%s" % utils.splitext_plus(in_file)
-    if not utils.file_uptodate(out_file, in_file):
-        with file_transaction(data, out_file) as tx_out_file:
-            with shared.bedtools_tmpdir(data):
-                all_file = "%s-all.bed" % utils.splitext_plus(tx_out_file)[0]
-                with open(all_file, "w") as out_handle:
-                    for line in fileinput.input(highdepth_beds):
-                        out_handle.write(line)
-                if utils.file_exists(all_file):
-                    to_remove = pybedtools.BedTool(all_file).sort(stream=True)\
-                                                            .merge(c=4, o="distinct", delim=",").saveas()
-                    pybedtools.BedTool(in_file).intersect(to_remove, v=True, nonamecheck=True).saveas(tx_out_file)
-                else:
-                    utils.symlink_plus(in_file, out_file)
-    return out_file
-
 def _filter_ensemble(in_bed, data):
     """Filter ensemble set of calls, requiring calls supported by 2 callers.
 
@@ -181,7 +160,7 @@ def _filter_ensemble(in_bed, data):
                                     break
     return out_file
 
-def summarize(calls, data, highdepth_beds):
+def summarize(calls, data, items):
     """Summarize results from multiple callers into a single flattened BED file.
 
     Approach:
@@ -203,10 +182,7 @@ def summarize(calls, data, highdepth_beds):
                 filter_file = _filter_ensemble(out_file, data)
             else:
                 filter_file = out_file
-            if len(highdepth_beds) > 0:
-                limit_file = _limit_calls(filter_file, highdepth_beds, data)
-            else:
-                limit_file = filter_file
+            limit_file = shared.remove_highdepth_regions(filter_file, items)
             exclude_files = [f for f in [x.get("exclude_file") for x in calls] if f]
             exclude_file = exclude_files[0] if len(exclude_files) > 0 else None
             if exclude_file:

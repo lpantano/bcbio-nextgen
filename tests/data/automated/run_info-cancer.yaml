@@ -15,11 +15,12 @@ details:
       mark_duplicates: false
       recalibrate: false
       realign: false
-      variantcaller: [vardict-java, mutect, freebayes, varscan]
+      variantcaller: [qsnp, vardict-java, mutect, freebayes, varscan]
       indelcaller: sid
       ensemble:
         numpass: 2
       svcaller: [cnvkit]
+      hetcaller: bubbletree
       variant_regions: ../data/automated/variant_regions-cancer.bed
       priority_regions: ../data/automated/variant_regions-cancer.bed
   - analysis: variant2
@@ -34,7 +35,7 @@ details:
       mark_duplicates: false
       recalibrate: false
       realign: false
-      variantcaller: [vardict-java, mutect, freebayes, varscan]
+      variantcaller: [qsnp, vardict-java, mutect, freebayes, varscan]
       indelcaller: sid
       ensemble:
         numpass: 2
@@ -55,7 +56,7 @@ details:
       mark_duplicates: True
       recalibrate: false
       realign: false
-      variantcaller: [vardict-java, mutect, freebayes, varscan]
+      variantcaller: [qsnp, vardict-java, mutect, freebayes, varscan]
       indelcaller: sid
       ensemble:
         numpass: 2

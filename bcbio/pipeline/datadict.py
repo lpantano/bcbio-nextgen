@@ -19,6 +19,8 @@ LOOKUPS = {
                  "checker": file_exists},
     "work_dir": {"keys": ['dirs', 'work']},
     "sam_ref": {"keys": ["sam_ref"]},
+    "disambiguate": {"keys": ["config", "algorithm", "disambiguate"],
+                     "default": False},
     "lane": {"keys": ["rgnames", "lane"]},
     "cores": {"keys": ["config", "algorithm", "num_cores"], "default": 1},
     "sample_name": {"keys": ['rgnames', 'sample']},
@@ -28,6 +30,7 @@ LOOKUPS = {
     "ploidy": {"keys": ['config', 'algorithm', 'ploidy'], "default": 2},
     "gender": {"keys": ["metadata", "sex"], "default": ""},
     "batch": {"keys": ["metadata", "batch"]},
+    "hetcaller": {"keys": ["config", "algorithm", "hetcaller"]},
     "variantcaller": {"keys": ['config', 'algorithm', 'variantcaller']},
     "work_bam": {"keys": ["work_bam"]},
     "count_file": {"keys": ["count_file"]},
@@ -49,6 +52,7 @@ LOOKUPS = {
                        "default": "standard"},
     "adapters": {"keys": ['config', 'algorithm', 'adapters'],
                  "default": []},
+    "variation_resources": {"keys": ["genome_resources", "variation"], "default": {}},
     "qsig_file": {"keys": ['genome_resources', 'variation', 'qsignature'],
                   "checker": file_exists},
     "mixup_check": {"keys": ["config", "algorithm", "mixup_check"],
@@ -69,6 +73,7 @@ LOOKUPS = {
     "offtarget_stats": {"keys": ["regions", "offtarget_stats"]},
     "sample_callable": {"keys": ["regions", "sample_callable"]},
     "coverage_interval": {"keys": ["config", "algorithm", "coverage_interval"]},
+    "coverage_regions": {"keys": ["config", "algorithm", "coverage"]},
     "deduped_bam": {"keys": ["deduped_bam"]},
     "align_bam": {"keys": ["align_bam"]}
 }

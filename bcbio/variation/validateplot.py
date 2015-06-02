@@ -57,8 +57,7 @@ cat_labels = {"concordant": "Concordant",
               "discordant-extra-total": "Discordant (extra)",
               "discordant-shared-total": "Discordant (shared)"}
 vtype_labels = {"snp": "SNPs", "indel": "Indels"}
-prep_labels = {"gatk": "GATK best-practice BAM preparation (recalibration, realignment)",
-               "none": "Minimal BAM preparation (samtools de-duplication only)"}
+prep_labels = {}
 caller_labels = {"ensemble": "Ensemble", "freebayes": "FreeBayes",
                  "gatk": "GATK Unified\nGenotyper", "gatk-haplotype": "GATK Haplotype\nCaller"}
 
@@ -89,7 +88,11 @@ def _seaborn(df, prep, prepi, out_file, title=None, size=None):
         ax_row = axs[i] if len(vtypes) > 1 else axs
         for j, cat in enumerate(cats):
             vals, labels, maxval = _get_chart_info(df, vtype, cat, prep, callers)
-            ax = ax_row[j]
+            if len(cats) == 1:
+                assert j == 0
+                ax = ax_row
+            else:
+                ax = ax_row[j]
             if i == 0:
                 ax.set_title(cat_labels[cat], size=14)
             ax.get_yaxis().set_ticks([])
@@ -249,3 +252,23 @@ def get_bamprep(x, config):
         return "mixed"
     else:
         return ""
+
+# ## Frequency plots
+
+def facet_freq_plot(freq_csv, caller):
+    """Prepare a facet plot of frequencies stratified by variant type and status (TP, FP, FN).
+
+    Makes a nice plot with the output from validate.freq_summary
+    """
+    out_file = "%s.png" % os.path.splitext(freq_csv)[0]
+    plt.ioff()
+    sns.set(style='dark')
+    df = pd.read_csv(freq_csv)
+    g = sns.FacetGrid(df, row="vtype", col="valclass", margin_titles=True,
+                      col_order=["TP", "FN", "FP"], row_order=["snp", "indel"],
+                      sharey=False)
+    g.map(plt.hist, "freq", bins=20, align="left")
+    g.set(xlim=(0.0, 1.0))
+    g.fig.set_size_inches(8, 6)
+    g.fig.text(.05, .97, caller, horizontalalignment='center', size=14)
+    g.fig.savefig(out_file)

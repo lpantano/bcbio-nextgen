@@ -4,11 +4,12 @@ import contextlib
 
 from IPython.parallel import require
 
-from bcbio import chipseq, structural, upload
+from bcbio import heterogeneity, chipseq, structural, upload
 from bcbio.bam import callable
 from bcbio.rnaseq import sailfish
 from bcbio.distributed import ipython
 from bcbio.ngsalign import alignprep
+from bcbio import rnaseq
 from bcbio.pipeline import (archive, config_utils, disambiguate, sample,
                             qcsummary, shared, variation, run_info, rnaseq)
 from bcbio.provenance import system
@@ -169,6 +170,12 @@ def run_cufflinks(*args):
         return ipython.zip_args(apply(rnaseq.run_cufflinks, *args))
 
 @require(rnaseq)
+def run_stringtie_expression(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(rnaseq.run_stringtie_expression, *args))
+
+@require(rnaseq)
 def run_rnaseq_variant_calling(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
@@ -247,6 +254,12 @@ def finalize_sv(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(structural.finalize_sv, *args))
 
+@require(heterogeneity)
+def heterogeneity_estimate(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(heterogeneity.estimate, *args))
+
 @require(ensemble)
 def combine_calls(*args):
     args = ipython.unzip_args(args)
@@ -276,6 +289,12 @@ def disambiguate_split(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(disambiguate.split, *args))
+
+@require(disambiguate)
+def disambiguate_merge_extras(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(disambiguate.merge_extras, *args))
 
 @require(system)
 def machine_info(*args):

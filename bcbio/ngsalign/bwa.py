@@ -32,28 +32,57 @@ def align_bam(in_bam, ref_file, names, align_dir, data):
     out_file = os.path.join(align_dir, "{0}-sort.bam".format(names["lane"]))
     samtools = config_utils.get_program("samtools", config)
     bedtools = config_utils.get_program("bedtools", config)
-    bwa = config_utils.get_program("bwa", config)
     resources = config_utils.get_resources("samtools", config)
     num_cores = config["algorithm"].get("num_cores", 1)
     # adjust memory for samtools since used for input and output
     max_mem = config_utils.adjust_memory(resources.get("memory", "1G"),
                                          3, "decrease").upper()
-    bwa_resources = config_utils.get_resources("bwa", data["config"])
-    bwa_params = (" ".join([str(x) for x in bwa_resources.get("options", [])])
-                  if "options" in bwa_resources else "")
-    rg_info = novoalign.get_rg_info(names)
     if not utils.file_exists(out_file):
         with tx_tmpdir(data) as work_dir:
             with postalign.tobam_cl(data, out_file, bam.is_paired(in_bam)) as (tobam_cl, tx_out_file):
+                bwa_cmd = _get_bwa_mem_cmd(data, out_file, ref_file, "-")
                 tx_out_prefix = os.path.splitext(tx_out_file)[0]
                 prefix1 = "%s-in1" % tx_out_prefix
                 cmd = ("{samtools} sort -n -o -l 1 -@ {num_cores} -m {max_mem} {in_bam} {prefix1} "
                        "| {bedtools} bamtofastq -i /dev/stdin -fq /dev/stdout -fq2 /dev/stdout "
-                       "| {bwa} mem -p -M -t {num_cores} {bwa_params} -R '{rg_info}' -v 1 {ref_file} - | ")
+                       "| {bwa_cmd} | ")
                 cmd = cmd.format(**locals()) + tobam_cl
                 do.run(cmd, "bwa mem alignment from BAM: %s" % names["sample"], None,
                        [do.file_nonempty(tx_out_file), do.file_reasonable_size(tx_out_file, in_bam)])
     return out_file
+
+def _get_bwa_mem_cmd(data, out_file, ref_file, fastq1, fastq2=""):
+    """Perform piped bwa mem mapping potentially with alternative alleles in GRCh38 + HLA typing.
+
+    Commands for HLA post-processing:
+       base=TEST
+       run-HLA $base.hla > $base.hla.top
+       cat $base.hla.HLA*.gt | grep ^GT | cut -f2- > $base.hla.all
+       rm -f $base.hla.HLA*gt
+       rm -f $base.hla.HLA*gz
+    """
+    alt_file = ref_file + ".alt"
+    if utils.file_exists(alt_file):
+        bwakit_dir = os.path.dirname(os.path.realpath(utils.which("run-bwamem")))
+        hla_base = os.path.join(utils.safe_makedir(os.path.join(os.path.dirname(out_file), "hla")),
+                                os.path.basename(out_file) + ".hla")
+        alt_cmd = (" | {bwakit_dir}/k8 {bwakit_dir}/bwa-postalt.js -p {hla_base} {alt_file}")
+    else:
+        alt_cmd = ""
+    bwa = config_utils.get_program("bwa", data["config"])
+    num_cores = data["config"]["algorithm"].get("num_cores", 1)
+    bwa_resources = config_utils.get_resources("bwa", data["config"])
+    bwa_params = (" ".join([str(x) for x in bwa_resources.get("options", [])])
+                  if "options" in bwa_resources else "")
+    rg_info = novoalign.get_rg_info(data["rgnames"])
+    pairing = "-p" if not fastq2 else ""
+    # Restrict seed occurances to 1/2 of default, manage memory usage for centromere repeats in hg38
+    # https://sourceforge.net/p/bio-bwa/mailman/message/31514937/
+    # http://ehc.ac/p/bio-bwa/mailman/message/32268544/
+    mem_usage = "-c 250"
+    bwa_cmd = ("{bwa} mem {pairing} {mem_usage} -M -t {num_cores} {bwa_params} -R '{rg_info}' -v 1 "
+               "{ref_file} {fastq1} {fastq2} ")
+    return (bwa_cmd + alt_cmd).format(**locals())
 
 def _can_use_mem(fastq_file, data):
     """bwa-mem handle longer (> 70bp) reads with improved piping.
@@ -114,18 +143,10 @@ def align_pipe(fastq_file, pair_file, ref_file, names, align_dir, data):
 def _align_mem(fastq_file, pair_file, ref_file, out_file, names, rg_info, data):
     """Perform bwa-mem alignment on supported read lengths.
     """
-    bwa = config_utils.get_program("bwa", data["config"])
-    num_cores = data["config"]["algorithm"].get("num_cores", 1)
-    bwa_resources = config_utils.get_resources("bwa", data["config"])
-    bwa_params = (" ".join([str(x) for x in bwa_resources.get("options", [])])
-                  if "options" in bwa_resources else "")
-    with tx_tmpdir(data) as work_dir:
-        with postalign.tobam_cl(data, out_file, pair_file != "") as (tobam_cl, tx_out_file):
-            cmd = ("{bwa} mem -M -t {num_cores} {bwa_params} -R '{rg_info}' -v 1 {ref_file} "
-                   "{fastq_file} {pair_file} | ")
-            cmd = cmd.format(**locals()) + tobam_cl
-            do.run(cmd, "bwa mem alignment from fastq: %s" % names["sample"], None,
-                   [do.file_nonempty(tx_out_file), do.file_reasonable_size(tx_out_file, fastq_file)])
+    with postalign.tobam_cl(data, out_file, pair_file != "") as (tobam_cl, tx_out_file):
+        cmd = "%s | %s" % (_get_bwa_mem_cmd(data, out_file, ref_file, fastq_file, pair_file), tobam_cl)
+        do.run(cmd, "bwa mem alignment from fastq: %s" % names["sample"], None,
+                [do.file_nonempty(tx_out_file), do.file_reasonable_size(tx_out_file, fastq_file)])
     return out_file
 
 def _align_backtrack(fastq_file, pair_file, ref_file, out_file, names, rg_info, data):

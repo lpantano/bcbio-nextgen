@@ -2,10 +2,13 @@
 """
 import os
 from contextlib import closing, contextmanager
+import fileinput
 import functools
 import tempfile
 
+import pybedtools
 import pysam
+import toolz as tz
 
 from bcbio import bam, broad, utils
 from bcbio.pipeline import config_utils
@@ -25,7 +28,8 @@ def combine_bam(in_files, out_file, config):
     bam.index(out_file, config)
     return out_file
 
-def process_bam_by_chromosome(output_ext, file_key, default_targets=None, dir_ext_fn=None):
+def process_bam_by_chromosome(output_ext, file_key, default_targets=None, dir_ext_fn=None,
+                              remove_alts=False):
     """Provide targets to process a BAM file by individual chromosome regions.
 
     output_ext: extension to supply to output files
@@ -33,10 +37,12 @@ def process_bam_by_chromosome(output_ext, file_key, default_targets=None, dir_ex
     default_targets: a list of extra chromosome targets to process, beyond those specified
                      in the BAM file. Useful for retrieval of non-mapped reads.
     dir_ext_fn: A function to retrieve a directory naming extension from input data map.
+    remove_alts: Do not process alternative alleles.
     """
     if default_targets is None:
         default_targets = []
     def _do_work(data):
+        ignore_chroms = set(_get_alt_chroms(data) if remove_alts else [])
         bam_file = data[file_key]
         out_dir = os.path.dirname(bam_file)
         if dir_ext_fn:
@@ -51,13 +57,26 @@ def process_bam_by_chromosome(output_ext, file_key, default_targets=None, dir_ex
                 "{base}-split".format(base=os.path.splitext(out_file)[0]))
             with closing(pysam.Samfile(bam_file, "rb")) as work_bam:
                 for chr_ref in list(work_bam.references) + default_targets:
-                    chr_out = os.path.join(work_dir,
-                                           "{base}-{ref}{ext}".format(
-                                               base=os.path.splitext(os.path.basename(bam_file))[0],
-                                               ref=chr_ref, ext=output_ext))
-                    part_info.append((chr_ref, chr_out))
+                    if chr_ref not in ignore_chroms:
+                        chr_out = os.path.join(work_dir,
+                                               "{base}-{ref}{ext}".format(
+                                                   base=os.path.splitext(os.path.basename(bam_file))[0],
+                                                   ref=chr_ref, ext=output_ext))
+                        part_info.append((chr_ref, chr_out))
         return out_file, part_info
     return _do_work
+
+def _get_alt_chroms(data):
+    """Retrieve alternative contigs as defined in bwa *.alts files.
+    """
+    alt_files = [f for f in tz.get_in(["reference", "bwa", "indexes"], data, []) if f.endswith("alt")]
+    alts = []
+    for alt_file in alt_files:
+        with open(alt_file) as in_handle:
+            for line in in_handle:
+                if not line.startswith("@"):
+                    alts.append(line.split()[0].strip())
+    return alts
 
 def write_nochr_reads(in_file, out_file, config):
     """Write a BAM file of reads that are not mapped on a reference chromosome.
@@ -122,7 +141,6 @@ def _rewrite_bed_with_chrom(in_file, out_file, chrom):
 
 
 def _subset_bed_by_region(in_file, out_file, region, do_merge=True):
-    import pybedtools
     orig_bed = pybedtools.BedTool(in_file)
     region_bed = pybedtools.BedTool("\t".join(str(x) for x in region) + "\n", from_string=True)
     if do_merge:
@@ -140,7 +158,6 @@ def get_lcr_bed(items):
 def remove_lcr_regions(orig_bed, items):
     """If configured and available, update a BED file to remove low complexity regions.
     """
-    import pybedtools
     lcr_bed = get_lcr_bed(items)
     if lcr_bed:
         nolcr_bed = os.path.join("%s-nolcr.bed" % (utils.splitext_plus(orig_bed)[0]))
@@ -151,9 +168,32 @@ def remove_lcr_regions(orig_bed, items):
             orig_bed = nolcr_bed
     return orig_bed
 
+def remove_highdepth_regions(in_file, items):
+    """Remove high depth regions from a BED file for analyzing a set of calls.
+
+    Tries to avoid spurious errors and slow run times in collapsed repeat regions.
+    """
+    highdepth_beds = filter(lambda x: x is not None,
+                            list(set([tz.get_in(["config", "algorithm", "highdepth_regions"], x) for x in items])))
+    out_file = "%s-glimit%s" % utils.splitext_plus(in_file)
+    if not utils.file_uptodate(out_file, in_file):
+        with file_transaction(items[0], out_file) as tx_out_file:
+            with bedtools_tmpdir(items[0]):
+                all_file = "%s-all.bed" % utils.splitext_plus(tx_out_file)[0]
+                if len(highdepth_beds) > 0:
+                    with open(all_file, "w") as out_handle:
+                        for line in fileinput.input(highdepth_beds):
+                            out_handle.write(line)
+                if utils.file_exists(all_file):
+                    to_remove = pybedtools.BedTool(all_file).sort(stream=True)\
+                                                            .merge(c=4, o="distinct", delim=",").saveas()
+                    pybedtools.BedTool(in_file).intersect(to_remove, v=True, nonamecheck=True).saveas(tx_out_file)
+                else:
+                    utils.symlink_plus(in_file, out_file)
+    return out_file
+
 @contextmanager
 def bedtools_tmpdir(data):
-    import pybedtools
     with tx_tmpdir(data) as tmpdir:
         orig_tmpdir = tempfile.gettempdir()
         pybedtools.set_tempdir(tmpdir)

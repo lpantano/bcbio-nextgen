@@ -27,14 +27,14 @@ from bcbio.distributed.transaction import file_transaction
 
 REMOTES = {
     "requirements": "https://raw.github.com/chapmanb/bcbio-nextgen/master/requirements.txt",
-    "gitrepo": "git://github.com/chapmanb/bcbio-nextgen.git",
+    "gitrepo": "https://github.com/chapmanb/bcbio-nextgen.git",
     "cloudbiolinux": "https://github.com/chapmanb/cloudbiolinux.git",
     "genome_resources": "https://raw.github.com/chapmanb/bcbio-nextgen/master/config/genomes/%s-resources.yaml",
     "snpeff_dl_url": ("http://downloads.sourceforge.net/project/snpeff/databases/v{snpeff_ver}/"
                       "snpEff_v{snpeff_ver}_{genome}.zip")}
-SUPPORTED_GENOMES = ["GRCh37", "hg19", "mm10", "mm9", "rn5", "canFam3", "dm3",
-                     "Zv9", "phix", "sacCer3", "xenTro3", "TAIR10", "WBcel235",
-                     "pseudomonas_aeruginosa_ucbpp_pa14"]
+SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
+                     "canFam3", "dm3", "Zv9", "phix", "sacCer3",
+                     "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"]
 SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc", "seq"]
 
 Tool = collections.namedtuple("Tool", ["name", "fname"])
@@ -79,7 +79,7 @@ def upgrade_bcbio(args):
             _symlink_bcbio(args, script="bcbio_prepare_samples.py")
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
-    if args.toolplus:
+    if args.toolplus and (args.tooldir or args.upgrade != "skip"):
         print("Installing additional tools")
         _install_toolplus(args)
     if args.install_data:
@@ -177,6 +177,11 @@ def _install_container_bcbio_system(datadir):
         yaml.safe_dump(expose_config, out_handle, default_flow_style=False, allow_unicode=False)
     return expose_file
 
+def _get_conda_bin():
+    conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
+    if os.path.exists(conda_bin):
+        return conda_bin
+
 def _default_deploy_args(args):
     toolplus = {"data": {"bio_nextgen": []}}
     custom_add = collections.defaultdict(list)
@@ -191,19 +196,21 @@ def _default_deploy_args(args):
             "fabricrc_overrides": {"edition": "minimal",
                                    "use_sudo": args.sudo,
                                    "keep_isolated": args.isolate,
+                                   "conda_cmd": _get_conda_bin(),
                                    "distribution": args.distribution or "__auto__",
                                    "dist_name": "__auto__"}}
 
 def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
-    conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
-    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "lxml",
+    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
-            "pip", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml", "pyzmq", "reportlab", "requests",
-            "scikit-learn", "scipy", "seaborn", "setuptools", "sqlalchemy", "statsmodels", "toolz", "tornado"]
+            "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
+            "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
+            "sqlalchemy", "statsmodels", "toolz", "tornado"]
     channels = ["-c", "https://conda.binstar.org/bcbio"]
-    if os.path.exists(conda_bin):
+    conda_bin = _get_conda_bin()
+    if conda_bin:
         subprocess.check_call([conda_bin, "install", "--yes", "numpy"])
         subprocess.check_call([conda_bin, "install", "--yes"] + channels + pkgs)
         return os.path.dirname(os.path.dirname(conda_bin))
@@ -257,6 +264,7 @@ def _upgrade_genome_resources(galaxy_dir, base_url):
     for dbkey, ref_file in genome.get_builds(galaxy_dir):
         # Check for a remote genome resources file
         remote_url = base_url % dbkey
+        requests.packages.urllib3.disable_warnings()
         r = requests.get(remote_url, verify=False)
         if r.status_code == requests.codes.ok:
             local_file = os.path.join(os.path.dirname(ref_file), os.path.basename(remote_url))
@@ -345,6 +353,7 @@ def upgrade_thirdparty_tools(args, remotes):
     s = {"fabricrc_overrides": {"system_install": args.tooldir,
                                 "local_install": os.path.join(args.tooldir, "local_install"),
                                 "distribution": args.distribution,
+                                "conda_cmd": _get_conda_bin(),
                                 "use_sudo": args.sudo,
                                 "edition": "minimal"}}
     s = _default_deploy_args(args)
@@ -440,6 +449,7 @@ def _install_gemini(tooldir, datadir, args):
     gemini = os.path.join(os.path.dirname(sys.executable), "gemini")
     if os.path.exists(gemini):
         vurl = "https://raw.github.com/arq5x/gemini/master/requirements.txt"
+        requests.packages.urllib3.disable_warnings()
         r = requests.get(vurl, verify=False)
         for line in r.text.split():
             if line.startswith(("gemini=", "gemini>")):

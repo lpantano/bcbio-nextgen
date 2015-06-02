@@ -1,16 +1,55 @@
-## 0.8.8 (in progress)
+## 0.9.0 (in progress)
+
+- GATK 3.4: support HaplotypeCaller by avoiding setting downsampling (-dcov)
+  option by default.
+- Single sample structural variant calling: corectly handle multiple variant
+  callers. Thanks to Sven-Eric Schelhorn.
+- Fix VEP/GEMINI incompatibility where empty fields are included in VCF output.
+- VarDict: restrict maximum region size within a BED file to 2Mb to avoid high
+  memory usage and failures for longer regions.
+- Include snpEff effects summary file in output directory when used for effects
+  prediction.
+
+## 0.8.9 (10 May 2015)
+
+- Upgrade variant effect predictor (VEP) to the latest Ensembl version (79) with
+  support for hg38. The latest VEP has better support for multiple versions
+  but incompatible database naming. This requires an update of tools and data in
+  a two step process. First `bcbio_nextgen.py upgrade -u stable --tools`
+  (or `-u development`) then `bcbio_nextgen.py upgrade --data`.
+- Improve de-duplication for split alignments. Do not sort/merge during splits,
+  and instead perform a global merge sort and de-duplication of the final set of
+  reads.
+- Initial support for new human genome build (hg38/GRCh38) including alternative
+  alleles. Usage is in place but still requires validation and additional testing.
+- Remove alternative alleles from downstream variant calling after using in alignment
+  to avoid issues with chromosome names like `HLA*`.
+- Enable installation of external conda-managed tools. Adds in builds for
+  heterogeneity analysis.
+- Clean up preparation process for multi-allelic inputs to GEMINI to avoid
+  needing to split/merge. Thanks to Sven-Eric Schelhorn.
+
+## 0.8.8 (29 April 2015)
 
 - Automatically calculate `coverage_interval` based on coverage calculations,
   avoiding need to set this directly in input configuration.
 - Update vt decompose to handle additional multi-allelic adjustments including
   all format attributes, providing full support for new GEMINI changes. Thanks
   to Brent Pedersen and Adrian Tan.
+- Add `default` configuration target to `bcbio_system.yaml` reducing the need
+  to set program specific arguments for everything.
+- Ensure `resources` specified in input YAML get passed to global system
+  configuration for making parallelization decisions. Thanks to Miika Ahdesmaki.
 - Run upload process on distributed machines, allowing upload to S3 on AWS to take
   advantage of machines with multiple cores. Thanks to Lorena Pantano.
 - Re-write interactions with external object stores like S3 to be more general
   and incorporate multiple regions and future support for non-S3 storage.
+- Scale local jobs by total memory usage when memory constrains resource usage
+  jinstead of cores. Thanks to Sven-Eric Schelhorn and Lorena Pantano.
 - Disambiguation: improve parallelization by disambiguating on split alignment
   parts prior to merging. Thanks to Sven-Eric Schelhorn.
+- Disambiguation: ensure ambiguous and other organism reads are sorted, merged
+  and passed to final upload directory. Thanks to Sven-Eric Schelhorn.
 - Fix problem with sambamba name sorting not being compatible with samtools.
   Thanks to Sven-Eric Schelhorn.
 - FreeBayes: update to latest version (0.9.21-7) with validation
@@ -21,6 +60,9 @@
 - Better error checking for booleans in input configuration. Thanks to Daryl
   Waggott.
 - Implement qualimap for RNAseq QC metrics, but not active yet.
+- collect statistics graphing capabilities moved from bcbio-nextgen-vm, enabling
+  plotting of resource usage during runs. Thanks to John Morrissey and Lorena
+  Pantano.
 
 ## 0.8.7 (12 March 2015)
 

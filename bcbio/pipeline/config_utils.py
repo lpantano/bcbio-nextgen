@@ -8,6 +8,8 @@ import os
 import sys
 import yaml
 
+import toolz as tz
+
 class CmdNotFound(Exception):
     pass
 
@@ -155,7 +157,8 @@ def expand_path(path):
 def get_resources(name, config):
     """Retrieve resources for a program, pulling from multiple config sources.
     """
-    return config.get("resources", {}).get(name, {})
+    return tz.get_in(["resources", name], config,
+                     tz.get_in(["resources", "default"], config, {}))
 
 def get_program(name, config, ptype="cmd", default=None):
     """Retrieve program information from the configuration.
@@ -307,6 +310,16 @@ def _update_config(args, update_fn):
     args = list(args)[:]
     args[new_i] = new_arg
     return args
+
+def convert_to_bytes(mem_str):
+    """Convert a memory specification, potentially with M or G, into bytes.
+    """
+    if str(mem_str)[-1].upper().endswith("G"):
+        return int(mem_str[:-1]) * 1024 * 1024
+    elif str(mem_str)[-1].upper().endswith("M"):
+        return int(mem_str[:-1]) * 1024
+    else:
+        return int(mem_str)
 
 def adjust_memory(val, magnitude, direction="increase", out_modifier=""):
     """Adjust memory based on number of cores utilized.

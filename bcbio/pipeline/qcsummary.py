@@ -98,7 +98,9 @@ def _run_qc_tools(bam_file, data):
         :returns: dict with output of different tools
     """
     metrics = {}
-    to_run = [("fastqc", _run_fastqc)]
+    to_run = []
+    if "fastqc" not in tz.get_in(("config", "algorithm", "tools_off"), data, []):
+        to_run.append(("fastqc", _run_fastqc))
     if data["analysis"].lower().startswith("rna-seq"):
         # to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
         # to_run.append(("coverage", _run_gene_coverage))
@@ -631,7 +633,8 @@ def _count_rRNA_reads(in_bam, out_file, ref_file, rRNA_interval, single_end, con
                       "-I", in_bam,
                       "-log", tx_out_file,
                       "-L", rRNA_coor,
-                      "--filter_reads_with_N_cigar"]
+                      "--filter_reads_with_N_cigar",
+                      "-allowPotentiallyMisencodedQuals"]
             jvm_opts = broad.get_gatk_framework_opts(config)
             cmd = [config_utils.get_program("gatk-framework", config)] + jvm_opts + params
             do.run(cmd, "counts rRNA for %s" % in_bam)
@@ -689,9 +692,9 @@ def _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file=None, single_end=No
     """
     Create command lines for qualimap
     """
-    num_cores = config["algorithm"].get("num_cores", 1)
     qualimap = config_utils.get_program("qualimap", config)
     resources = config_utils.get_resources("qualimap", config)
+    num_cores = resources.get("cores", 1)
     max_mem = config_utils.adjust_memory(resources.get("memory", "4G"),
                                          num_cores)
     cmd = ("unset DISPLAY && {qualimap} rnaseq -outdir {out_dir} -a proportional -bam {bam_file} "

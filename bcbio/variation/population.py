@@ -68,15 +68,25 @@ def create_gemini_db(gemini_vcf, data, gemini_db=None, ped_file=None):
             # skip gerp-bp which slows down loading
             load_opts += " --skip-gerp-bp "
             num_cores = data["config"]["algorithm"].get("num_cores", 1)
-            eanns = ("snpEff" if tz.get_in(("config", "algorithm", "effects"), data, "snpeff") == "snpeff"
-                     else "VEP")
-            cmd = "{gemini} load {load_opts} -v {gemini_vcf} -t {eanns} --cores {num_cores} {tx_gemini_db}"
+            tmpdir = os.path.dirname(tx_gemini_db)
+            eanns = _get_effects_flag(data)
+            cmd = ("{gemini} load {load_opts} -v {gemini_vcf} {eanns} --cores {num_cores} "
+                   "--tempdir {tmpdir} {tx_gemini_db}")
             cmd = cmd.format(**locals())
             do.run(cmd, "Create gemini database for %s" % gemini_vcf, data)
             if ped_file:
                 cmd = [gemini, "amend", "--sample", ped_file, tx_gemini_db]
                 do.run(cmd, "Add PED file to gemini database", data)
     return gemini_db
+
+def _get_effects_flag(data):
+    effects_config = tz.get_in(("config", "algorithm", "effects"), data, "snpeff")
+    if effects_config == "snpeff":
+        return "-t snpEff"
+    elif effects_config == "vep":
+        return "-t VEP"
+    else:
+        return ""
 
 def get_affected_status(data):
     """Retrieve the affected/unaffected status of sample.

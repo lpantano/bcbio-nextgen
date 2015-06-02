@@ -5,13 +5,8 @@ count number of reads mapping to features of transcripts
 import os
 import sys
 import itertools
-
-# soft imports
-try:
-    import pandas as pd
-    import gffutils
-except ImportError:
-    pd, gffutils = None, None, None
+import pandas as pd
+import gffutils
 
 from bcbio.utils import file_exists
 from bcbio.distributed.transaction import file_transaction
@@ -27,7 +22,7 @@ def combine_count_files(files, out_file=None, ext=".fpkm"):
         "Some count files in %s do not exist." % files
     for f in files:
         assert file_exists(f), "%s does not exist or is empty." % f
-    col_names = [os.path.basename(os.path.splitext(x)[0]) for x in files]
+    col_names = [os.path.basename(x.replace(ext, "")) for x in files]
     if not out_file:
         out_dir = os.path.join(os.path.dirname(files[0]))
         out_file = os.path.join(out_dir, "combined.counts")

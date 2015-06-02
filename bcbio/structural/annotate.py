@@ -1,17 +1,20 @@
 """Annotate structural variant calls with associated genes.
 """
+import os
+
 from bcbio import utils
 from bcbio.distributed.transaction import file_transaction
-from bcbio.pipeline import datadict as dd
 from bcbio.provenance import do
+from bcbio.structural import regions
+
+import pybedtools
 
 def add_genes(in_file, data, max_distance=10000):
     """Add gene annotations to a BED file from pre-prepared RNA-seq data.
 
     max_distance -- only keep annotations within this distance of event
     """
-    import pybedtools
-    gene_file = dd.get_gene_bed(data)
+    gene_file = regions.get_sv_bed(data, "exons", out_dir=os.path.dirname(in_file))
     if gene_file and utils.file_exists(in_file):
         out_file = "%s-annotated.bed" % utils.splitext_plus(in_file)[0]
         if not utils.file_uptodate(out_file, in_file):
@@ -33,7 +36,7 @@ def add_genes(in_file, data, max_distance=10000):
                 cmd = ("sort -k1,1 -k2,2n {in_file} | "
                        "bedtools closest -d -t all -a - -b {gene_file} | "
                        "{distance_filter} | cut -f 1-{max_column} | "
-                       "bedtools merge -i - -c {columns} -o {ops} -delim ';' > {tx_out_file}")
+                       "bedtools merge -i - -c {columns} -o {ops} -delim ',' > {tx_out_file}")
                 do.run(cmd.format(**locals()), "Annotate BED file with gene info")
         return out_file
     else:

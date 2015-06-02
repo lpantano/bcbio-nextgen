@@ -12,14 +12,13 @@ import tempfile
 
 import yaml
 
-from bcbio import log, structural, utils
+from bcbio import log, heterogeneity, structural, utils
 from bcbio.distributed import prun
 from bcbio.distributed.transaction import tx_tmpdir
 from bcbio.log import logger
 from bcbio.ngsalign import alignprep
-from bcbio.pipeline import (archive, disambiguate, region, run_info, qcsummary,
-                            rnaseq)
-from bcbio.pipeline.config_utils import load_system_config
+from bcbio.pipeline import (archive, config_utils, disambiguate, region,
+                            run_info, qcsummary, rnaseq)
 from bcbio.provenance import profile, system
 from bcbio.variation import coverage, ensemble, genotype, population, validate, joint
 
@@ -28,7 +27,7 @@ def run_main(workdir, config_file=None, fc_dir=None, run_info_yaml=None,
     """Run variant analysis, handling command line options.
     """
     os.chdir(workdir)
-    config, config_file = load_system_config(config_file, workdir)
+    config, config_file = config_utils.load_system_config(config_file, workdir)
     if config.get("log_dir", None) is None:
         config["log_dir"] = os.path.join(workdir, "log")
     if parallel["type"] in ["local", "clusterk"]:
@@ -72,7 +71,7 @@ def _run_toplevel(config, config_file, work_dir, parallel,
     log.setup_local_logging(config, parallel)
     dirs = run_info.setup_directories(work_dir, fc_dir, config, config_file)
     config_file = os.path.join(dirs["config"], os.path.basename(config_file))
-    pipelines = _pair_samples_with_pipelines(run_info_yaml)
+    pipelines, config = _pair_samples_with_pipelines(run_info_yaml, config)
     system.write_info(dirs, parallel, config)
     with tx_tmpdir(config) as tmpdir:
         tempfile.tempdir = tmpdir
@@ -182,6 +181,8 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = validate.summarize_grading(samples)
             with profile.report("structural variation", dirs):
                 samples = structural.run(samples, run_parallel)
+            with profile.report("heterogeneity", dirs):
+                samples = heterogeneity.run(samples, run_parallel)
             with profile.report("population database", dirs):
                 samples = population.prep_db_parallel(samples, run_parallel)
             with profile.report("quality control", dirs):
@@ -308,7 +309,8 @@ class RnaseqPipeline(AbstractPipeline):
             with profile.report("RNA-seq variant calling", dirs):
                 samples = rnaseq.rnaseq_variant_calling(samples, run_parallel)
 
-        with prun.start(_wres(parallel, ["picard", "fastqc", "rnaseqc", "kraken"]),
+        with prun.start(_wres(parallel, ["picard", "fastqc", "qualimap", "kraken", "gatk"],
+                              ensure_mem={"qualimap": 4}),
                         samples, config, dirs, "qc") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
@@ -356,21 +358,35 @@ def _get_pipeline(item):
     else:
         return SUPPORTED_PIPELINES[analysis_type]
 
-def _pair_samples_with_pipelines(run_info_yaml):
+def _pair_samples_with_pipelines(run_info_yaml, config):
     """Map samples defined in input file to pipelines to run.
     """
     with open(run_info_yaml) as in_handle:
         samples = yaml.safe_load(in_handle)
         if isinstance(samples, dict):
+            resources = samples.pop("resources", {})
             samples = samples["details"]
+        else:
+            resources = {}
     ready_samples = []
     for sample in samples:
         if "files" in sample:
             del sample["files"]
+        # add any resources to this item to recalculate global configuration
+        usample = copy.deepcopy(sample)
+        usample.pop("algorithm", None)
+        if "resources" not in usample:
+            usample["resources"] = {}
+        for prog, pkvs in resources.iteritems():
+            if prog not in usample["resources"]:
+                usample["resources"][prog] = {}
+            for key, val in pkvs.iteritems():
+                usample["resources"][prog][key] = val
+        config = config_utils.update_w_custom(config, usample)
         sample["resources"] = {}
         ready_samples.append(sample)
     paired = [(x, _get_pipeline(x)) for x in ready_samples]
     d = defaultdict(list)
     for x in paired:
         d[x[1]].append([x[0]])
-    return d
+    return d, config

@@ -58,6 +58,7 @@ def _get_files_rnaseq(sample):
     algorithm = sample["config"]["algorithm"]
     out = _maybe_add_summary(algorithm, sample, out)
     out = _maybe_add_alignment(algorithm, sample, out)
+    out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_counts(algorithm, sample, out)
     out = _maybe_add_cufflinks(algorithm, sample, out)
     out = _maybe_add_oncofuse(algorithm, sample, out)
@@ -97,6 +98,7 @@ def _get_files_variantcall(sample):
     algorithm = sample["config"]["algorithm"]
     out = _maybe_add_summary(algorithm, sample, out)
     out = _maybe_add_alignment(algorithm, sample, out)
+    out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_variant_file(algorithm, sample, out)
     out = _maybe_add_sv(algorithm, sample, out)
     out = _maybe_add_validate(algorithm, sample, out)
@@ -126,6 +128,13 @@ def _maybe_add_variant_file(algorithm, sample, out):
                             "type": "bed",
                             "ext": "%s-callregions" % x["variantcaller"],
                             "variantcaller": x["variantcaller"]})
+            if x.get("vrn_stats"):
+                for extra, fname in x["vrn_stats"].items():
+                    ext = utils.splitext_plus(fname)[-1].replace(".", "")
+                    out.append({"path": fname,
+                                "type": ext,
+                                "ext": "%s-%s" % (x["variantcaller"], extra),
+                                "variantcaller": x["variantcaller"]})
     return out
 
 def _maybe_add_sv(algorithm, sample, out):
@@ -133,6 +142,10 @@ def _maybe_add_sv(algorithm, sample, out):
         for svcall in sample["sv"]:
             out.extend(_get_variant_file(svcall, ("vrn_file",)))
             out.extend(_get_variant_file(svcall, ("bedpe_file",)))
+            out.extend(_get_variant_file(svcall, ("cnr",)))
+            out.extend(_get_variant_file(svcall, ("cns",)))
+            out.extend(_get_variant_file(svcall, ("cnr_bed",)))
+            out.extend(_get_variant_file(svcall, ("cnr_bedgraph",)))
             if "sample_bed" in svcall:
                 out.append({"path": svcall["sample_bed"],
                             "type": "bed",
@@ -183,7 +196,7 @@ def _get_variant_file(x, key):
                             "index": True,
                             "ext": x["variantcaller"],
                             "variantcaller": x["variantcaller"]})
-        elif fname.endswith((".vcf", ".bed", ".bedpe")):
+        elif fname.endswith((".vcf", ".bed", ".bedpe", ".bedgraph", ".cnr", ".cns", ".cnn")):
             ftype = utils.splitext_plus(fname)[-1][1:]
             out.append({"path": fname,
                         "type": ftype,
@@ -231,6 +244,24 @@ def _maybe_add_alignment(algorithm, sample, out):
                                 "plus": isplus,
                                 "index": True,
                                 "ext": ext})
+    return out
+
+def _maybe_add_disambiguate(algorithm, sample, out):
+    if "disambiguate" in sample:
+        for extra_name, fname in sample["disambiguate"].items():
+            ftype = os.path.splitext(fname)[-1].replace(".", "")
+            fext = ".bai" if ftype == "bam" else ""
+            if fname and os.path.exists(fname):
+                out.append({"path": fname,
+                            "type": ftype,
+                            "plus": True,
+                            "ext": "disambiguate-%s" % extra_name})
+                if fext and utils.file_exists(fname + fext):
+                    out.append({"path": fname + fext,
+                                "type": ftype + fext,
+                                "plus": True,
+                                "index": True,
+                                "ext": "disambiguate-%s" % extra_name})
     return out
 
 def _maybe_add_counts(algorithm, sample, out):
@@ -305,6 +336,10 @@ def _get_files_project(sample, upload_config):
         cov_db = tz.get_in(["coverage", "summary"], sample)
         if cov_db:
             out.append({"path": cov_db, "type": "sqlite", "ext": "coverage"})
+        incomplete = tz.get_in(["coverage", "incomplete"], sample)
+        if incomplete:
+            out.append({"path": incomplete, "type": "bed", "ext": "coverage"})
+
 
     if dd.get_combined_counts(sample):
         out.append({"path": dd.get_combined_counts(sample)})

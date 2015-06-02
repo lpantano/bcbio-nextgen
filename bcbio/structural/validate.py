@@ -41,7 +41,7 @@ def cnv_to_event(name, data):
     """
     ploidy = dd.get_ploidy(data)
     if name.startswith("cnv"):
-        num = int(name.split("_")[0].replace("cnv", ""))
+        num = max([int(x) for x in name.split("_")[0].replace("cnv", "").split(";")])
         if num < ploidy:
             return "DEL"
         elif num > ploidy:
@@ -138,6 +138,8 @@ def _plot_evaluation_event(df_csv, svtype):
         df = df[(df["svtype"] == svtype)]
         event_sizes = _find_events_to_include(df, EVENT_SIZES)
         fig, axs = plt.subplots(len(event_sizes), len(metrics), tight_layout=True)
+        if len(event_sizes) == 1:
+            axs = [axs]
         callers = sorted(df["caller"].unique())
         if "sv-ensemble" in callers:
             callers.remove("sv-ensemble")

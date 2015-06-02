@@ -360,30 +360,6 @@ def combine_variant_files(orig_files, out_file, ref_file, config,
     else:
         return out_file
 
-def merge_sorted(orig_files, out_file, data):
-    """Merge multiple sorted VCFs into a final sorted VCF doing no manipulation of the VCF.
-
-    This is useful when merging when we don't want any combining of the variant inputs like
-    done by CombineVariants.
-
-    XXX Current doesn't handle writing directly to bgzipped output, but hopefully will be
-    integrated in the future. Now returns non-bgzipped output to be prepped
-    """
-    from pysam import VariantFile
-    def _position_iter(bcf_in):
-        for rec in bcf_in:
-            yield (rec.rid, rec.start, rec)
-    if out_file.endswith(".vcf.gz"):
-        out_file = out_file.replace(".vcf.gz", ".vcf")
-    if not utils.file_exists(out_file):
-        with file_transaction(data, out_file) as tx_out_file:
-            bcf_inputs = [VariantFile(f) for f in orig_files]
-            bcf_iters = [_position_iter(x) for x in bcf_inputs]
-            with VariantFile(tx_out_file, "w", header=bcf_inputs[0].header) as bcf_out:
-                for c, s, rec in heapq.merge(*bcf_iters):
-                    bcf_out.write(rec)
-    return out_file
-
 def sort_by_ref(vcf_file, data):
     """Sort a VCF file by genome reference and position.
     """
@@ -484,6 +460,8 @@ def tabix_index(in_file, config, preset=None, tabix_args=None):
     in_file = os.path.abspath(in_file)
     out_file = in_file + ".tbi"
     if not utils.file_exists(out_file) or not utils.file_uptodate(out_file, in_file):
+        # Remove old index files to prevent linking into tx directory
+        utils.remove_safe(out_file)
         with file_transaction(config, out_file) as tx_out_file:
             tabix = tools.get_tabix_cmd(config)
             tx_in_file = os.path.splitext(tx_out_file)[0]

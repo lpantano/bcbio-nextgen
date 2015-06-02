@@ -6,6 +6,7 @@ import collections
 from contextlib import closing
 import os
 
+import pybedtools
 import pysam
 import toolz as tz
 
@@ -59,6 +60,18 @@ def has_variant_regions(items, base_file, chrom=None):
                 return False
     return True
 
+def remove_exclude_regions(orig_bed, base_file, items):
+    """Remove centromere and short end regions from an existing BED file of regions to target.
+    """
+    out_bed = os.path.join("%s-noexclude.bed" % (utils.splitext_plus(base_file)[0]))
+    exclude_bed = prepare_exclude_file(items, base_file)
+    with file_transaction(items[0], out_bed) as tx_out_bed:
+        pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(exclude_bed)).saveas(tx_out_bed)
+    if utils.file_exists(out_bed):
+        return out_bed
+    else:
+        return orig_bed
+
 def prepare_exclude_file(items, base_file, chrom=None):
     """Prepare a BED file for exclusion, incorporating variant regions and chromosome.
 
@@ -66,7 +79,6 @@ def prepare_exclude_file(items, base_file, chrom=None):
     centromere regions, both of which contribute to long run times and
     false positive structural variant calls.
     """
-    import pybedtools
     out_file = "%s-exclude.bed" % utils.splitext_plus(base_file)[0]
     all_vrs = _get_variant_regions(items)
     ready_region = (shared.subset_variant_regions(tz.first(all_vrs), chrom, base_file, items)
@@ -190,7 +202,7 @@ def _extract_split_and_discordants(in_bam, work_dir, data):
     disc_file = os.path.join(work_dir, "%s-disc.bam" % os.path.splitext(os.path.basename(in_bam))[0])
     samtools = config_utils.get_program("samtools", data["config"])
     cores = utils.get_in(data, ("config", "algorithm", "num_cores"), 1)
-    resources = config_utils.get_resources("sambamba", data["config"])
+    resources = config_utils.get_resources("samtools", data["config"])
     mem = config_utils.adjust_memory(resources.get("memory", "2G"),
                                      3, "decrease").upper()
     if not utils.file_exists(sr_file) or not utils.file_exists(disc_file) or utils.file_exists(dedup_file):
@@ -200,9 +212,9 @@ def _extract_split_and_discordants(in_bam, work_dir, data):
                     with file_transaction(data, dedup_file) as tx_dedup_file:
                         samblaster_cl = postalign.samblaster_dedup_sort(data, tx_dedup_file,
                                                                         tx_sr_file, tx_disc_file)
-                        out_base = os.path.join(tmpdir, "%s-namesort" % os.path.splitext(in_bam)[0])
-                        cmd = ("{samtools} sort -n -o -@ {cores} -m {mem} {in_bam} {out_base} | "
-                               "{samtools} view -h - | ")
+                        out_base = os.path.join(tmpdir,
+                                                "%s-namesort" % os.path.splitext(os.path.basename(in_bam))[0])
+                        cmd = ("{samtools} sort -n -@ {cores} -m {mem} -O sam -T {out_base} {in_bam} | ")
                         cmd = cmd.format(**locals()) + samblaster_cl
                         do.run(cmd, "samblaster: split and discordant reads", data)
     for fname in [sr_file, disc_file, dedup_file]:
@@ -224,6 +236,8 @@ def get_split_discordants(data, work_dir):
     """
     dedup_bam, sr_bam, disc_bam = _find_existing_inputs(data["align_bam"])
     if not dedup_bam:
+        work_dir = (work_dir if not os.access(os.path.dirname(data["align_bam"]), os.W_OK | os.X_OK)
+                    else os.path.dirname(data["align_bam"]))
         dedup_bam, sr_bam, disc_bam = _extract_split_and_discordants(data["align_bam"], work_dir, data)
     return dedup_bam, sr_bam, disc_bam
 
