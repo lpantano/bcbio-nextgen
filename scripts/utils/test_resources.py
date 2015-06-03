@@ -13,8 +13,11 @@ from bcbio.pipeline.main import _pair_samples_with_pipelines
 def ipython_fn(parallel, config):
     has_mincores = any(x.startswith("mincores=") for x in parallel["resources"])
     cores = min(ip._get_common_cores(config["resources"]), parallel["system_cores"])
+    # if has_mincores, check memory usage use min(adj_cores, mincores)
+    # min(common_cores, parallel[cores])
     if cores > 1 and not has_mincores:
         adj_cores = max(1, int(math.floor(cores * float(parallel.get("mem_pct", 1.0)))))
+        cores = adj_cores
         # if we have less scheduled cores than per machine, use the scheduled count
         if cores > parallel["cores"]:
             cores = parallel["cores"]
