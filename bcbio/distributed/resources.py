@@ -174,7 +174,7 @@ def calculate(parallel, items, sysinfo, config, multiplier=1,
                                                            min_memory=parallel.get("ensure_mem", {}))
     if cores_per_job == 1:
         memory_per_job = "%.2f" % memory_per_core
-        num_jobs, mem_pct = _scale_jobs_to_memory(num_jobs, memory_per_core, sysinfo)
+        num_jobs_per_machine, mem_pct = _scale_jobs_to_memory(num_jobs, memory_per_core, sysinfo)
     else:
         cores_per_job, memory_per_job, mem_pct = _scale_cores_to_memory(cores_per_job,
                                                                         memory_per_core, sysinfo,
@@ -193,6 +193,6 @@ def calculate(parallel, items, sysinfo, config, multiplier=1,
     parallel["cores_per_job"] = cores_per_job
     parallel["num_jobs"] = num_jobs
     parallel["mem"] = str(memory_per_job)
-    parallel["mem_pct"] = "%.2f" % mem_pct
+    parallel["mem_pct"] = "%.3f" % mem_pct
     parallel["system_cores"] = sysinfo.get("cores", 1)
     return parallel
