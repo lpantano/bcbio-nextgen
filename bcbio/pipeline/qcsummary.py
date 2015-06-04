@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 
+import pandas as pd
 import lxml.html
 import yaml
 from datetime import datetime
@@ -283,23 +284,23 @@ class FastQCParser:
                         out.append(line.rstrip("\r\n"))
         return out
 
-    def save_sections_into_file(self, section):
+    def save_sections_into_file(self):
 
         data_file = os.path.join(self._dir, "fastqc_data.txt")
         if os.path.exists(data_file):
-            with open(data_file) as in_handle:
-                parser = Fadapa(fn)
-                module = [m[1] for m in parser.summary()][2:10]
-                for m in module:
-                    out_file = os.paht.join(self._dir, m.replace(" ", "_") + ".tsv")
-                    self._get_module(parser, m, out_file)
+            parser = Fadapa(data_file)
+            module = [m[1] for m in parser.summary()][2:9]
+            for m in module:
+                out_file = os.path.join(self._dir, m.replace(" ", "_") + ".tsv")
+                dt = self._get_module(parser, m)
+                dt.to_csv(out_file, sep="\t", index=False)
 
     def _get_module(self, parser, module):
         """
         Get module using fadapa package
         """
         dt = []
-        lines = self.parser.clean_data(module)
+        lines = parser.clean_data(module)
         header = lines[0]
         for data in lines[1:]:
             if data[0].startswith("#"): #some modules have two headers
@@ -314,7 +315,7 @@ class FastQCParser:
         dt = pd.DataFrame(dt)
         dt.columns = [h.replace(" ", "_") for h in header]
         dt['sample'] = self.sample
-    return dt
+        return dt
 
 
 def _run_gene_coverage(bam_file, data, out_dir):
@@ -448,7 +449,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
                     shutil.move(tx_fastqc_out, fastqc_out)
         if ds_bam and os.path.exists(ds_bam):
             os.remove(ds_bam)
-    parser = FastQCParser(fastqc_out)
+    parser = FastQCParser(fastqc_out, data["name"][-1])
     stats = parser.get_fastqc_summary()
     parser.save_sections_into_file()
     return stats
