@@ -10,6 +10,7 @@ from bcbio.distributed import clargs, resources, ipython as ip
 from bcbio.pipeline.main import _pair_samples_with_pipelines
 
 
+<<<<<<< HEAD
 def ipc_fn(parallel):
     cores_per_job = parallel['cores_per_job']
     num_jobs = parallel['num_jobs']
@@ -44,6 +45,10 @@ def ipython_fn(parallel, config):
 
 def ipython_current(parallel, config):
     has_mincores = any(x.startswith("mincores=") for x in parallel["resources"])
+=======
+def ipython_fn(parallel, config):
+    has_mincores = any(x.startswith("mincores=") for x in parallel["resources"])
+>>>>>>> upstream/master
     cores = min(ip._get_common_cores(config["resources"]), parallel["system_cores"])
     if cores > 1 and not has_mincores:
         adj_cores = max(1, int(math.floor(cores * float(parallel.get("mem_pct", 1.0)))))
@@ -68,7 +73,10 @@ if __name__ == "__main__":
                         " or --sys-info  cores;memory for custom numbers")
     parser.add_argument("--progs", required=True, default=[], action='append', help="look for those tools")
     parser.add_argument("--galaxy", help="custom galaxy file.")
+<<<<<<< HEAD
     parser.add_argument("--fixed", help="fixed resources fn", action="store_true")
+=======
+>>>>>>> upstream/master
     parser.add_argument("-n", "--numcores", type=int,
                         default=1, help="Number of concurrent jobs to process.")
     parser.add_argument("-c", "--cores-per-job", type=int,
@@ -113,6 +121,7 @@ if __name__ == "__main__":
     print "after calculate fn"
     parallel = resources.calculate(parallel, samples, sysinfo, config)
     print parallel
+<<<<<<< HEAD
     if args.fixed:
         print "after fixed ipython fn"
         parallel = ipython_fn(parallel, config)
@@ -121,3 +130,8 @@ if __name__ == "__main__":
         parallel = ipython_current(parallel, config)
     print parallel
     ipc_fn(parallel)
+=======
+    print "after ipython fn"
+    parallel = ipython_fn(parallel, config)
+    print parallel
+>>>>>>> upstream/master
