@@ -48,6 +48,8 @@ LOOKUPS = {
     "dexseq_counts": {"keys": ['dexseq_counts']},
     "description": {"keys": ['description']},
     "aligner": {"keys": ['config', 'algorithm', 'aligner']},
+    "platform": {"keys": ['config', 'algorithm', 'platform'],
+                 "default": "illumina"},
     "quality_format": {"keys": ['config', 'algorithm', 'quality_format'],
                        "default": "standard"},
     "adapters": {"keys": ['config', 'algorithm', 'adapters'],
@@ -62,6 +64,7 @@ LOOKUPS = {
     "transcriptome_bam": {"keys": ["transcriptome_bam"]},
     "fpkm_isoform": {"keys": ["fpkm_isoform"]},
     "fpkm": {"keys": ["fpkm"]},
+    "galaxy_dir": {"keys": ["dirs", "galaxy"]},
     "assembled_gtf": {"keys": ["assembled_gtf"]},
     "assemble_transcripts": {"keys": ["config", "algorithm", "assemble_transcripts"],
                              "default": False},
@@ -75,7 +78,9 @@ LOOKUPS = {
     "coverage_interval": {"keys": ["config", "algorithm", "coverage_interval"]},
     "coverage_regions": {"keys": ["config", "algorithm", "coverage"]},
     "deduped_bam": {"keys": ["deduped_bam"]},
-    "align_bam": {"keys": ["align_bam"]}
+    "align_bam": {"keys": ["align_bam"]},
+    "tools_off": {"keys": ["config", "algorithm", "tools_off"], "default": []},
+    "tools_on": {"keys": ["config", "algorithm", "tools_on"], "default": []},
 }
 
 def get_input_sequence_files(data, default=None):

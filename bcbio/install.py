@@ -24,6 +24,7 @@ from bcbio import broad, utils
 from bcbio.pipeline import genome
 from bcbio.variation import effects
 from bcbio.distributed.transaction import file_transaction
+from bcbio.pipeline import datadict as dd
 
 REMOTES = {
     "requirements": "https://raw.github.com/chapmanb/bcbio-nextgen/master/requirements.txt",
@@ -95,7 +96,7 @@ def upgrade_bcbio(args):
     if args.isolate and args.tooldir:
         print("Installation directory not added to current PATH")
         print(" Add:\n  {t}/bin to PATH\n  {t}/lib to LD_LIBRARY_PATH\n"
-              "  {t}/lib/perl5:{t}/lib/perl5/site_perl to PERL5LIB".format(t=args.tooldir))
+              "  {t}/lib/perl5 to PERL5LIB".format(t=args.tooldir))
     save_install_defaults(args)
     args.datadir = _get_data_dir()
     _install_container_bcbio_system(args.datadir)
@@ -203,7 +204,7 @@ def _default_deploy_args(args):
 def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
-    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
@@ -223,12 +224,17 @@ def _get_data_dir():
                          "located in the same directory as `galaxy` `genomes` and `gemini_data` directories.")
     return os.path.dirname(base_dir)
 
-def get_gemini_dir():
+def get_gemini_dir(data=None):
     try:
         data_dir = _get_data_dir()
         return os.path.join(data_dir, "gemini_data")
     except ValueError:
-        return None
+        if data:
+            galaxy_dir = dd.get_galaxy_dir(data)
+            data_dir = os.path.realpath(os.path.dirname(os.path.dirname(galaxy_dir)))
+            return os.path.join(data_dir, "gemini_data")
+        else:
+            return None
 
 def upgrade_bcbio_data(args, remotes):
     """Upgrade required genome data files in place.

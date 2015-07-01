@@ -70,7 +70,7 @@ def prep_vep_cache(dbkey, ref_file, tooldir=None, config=None):
     if config is None: config = {}
     resource_file = os.path.join(os.path.dirname(ref_file), "%s-resources.yaml" % dbkey)
     if tooldir:
-        os.environ["PERL5LIB"] = "{t}/lib/perl5:{t}/lib/perl5/site_perl:{l}".format(
+        os.environ["PERL5LIB"] = "{t}/lib/perl5:{l}".format(
             t=tooldir, l=os.environ.get("PERL5LIB", ""))
     if os.path.exists(resource_file):
         with open(resource_file) as in_handle:
@@ -180,8 +180,8 @@ def _get_loftee(data):
 
 # ## snpEff variant effects
 
-def snpeff_version(args=None):
-    raw_version = programs.get_version_manifest("snpeff")
+def snpeff_version(args=None, data=None):
+    raw_version = programs.get_version_manifest("snpeff", data=data)
     if not raw_version:
         raw_version = ""
     snpeff_version = "".join([x for x in str(raw_version)
@@ -204,7 +204,7 @@ def _snpeff_args_from_config(data):
     args = []
     # Use older EFF formatting instead of new combined ANN formatting until
     # downstream tools catch up, then remove this.
-    if LooseVersion(snpeff_version()) >= LooseVersion("4.1"):
+    if LooseVersion(snpeff_version(data=data)) >= LooseVersion("4.1"):
         args += ["-formatEff", "-classic"]
     # General supplied arguments
     resources = config_utils.get_resources("snpeff", config)

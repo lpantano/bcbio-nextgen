@@ -26,6 +26,7 @@ def run_main(workdir, config_file=None, fc_dir=None, run_info_yaml=None,
              parallel=None, workflow=None):
     """Run variant analysis, handling command line options.
     """
+    workdir = utils.safe_makedir(os.path.abspath(workdir))
     os.chdir(workdir)
     config, config_file = config_utils.load_system_config(config_file, workdir)
     if config.get("log_dir", None) is None:
@@ -150,6 +151,8 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = region.clean_sample_data(samples)
             with profile.report("coverage", dirs):
                 samples = coverage.summarize_samples(samples, run_parallel)
+            with profile.report("structural variation initial", dirs):
+                samples = structural.run(samples, run_parallel, initial_only=True)
 
         ## Variant calling on sub-regions of the input file (full cluster)
         with prun.start(_wres(parallel, ["gatk", "picard", "variantcaller"]),
@@ -179,7 +182,7 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = ensemble.combine_calls_parallel(samples, run_parallel)
             with profile.report("validation summary", dirs):
                 samples = validate.summarize_grading(samples)
-            with profile.report("structural variation", dirs):
+            with profile.report("structural variation final", dirs):
                 samples = structural.run(samples, run_parallel)
             with profile.report("heterogeneity", dirs):
                 samples = heterogeneity.run(samples, run_parallel)
@@ -190,8 +193,9 @@ class Variant2Pipeline(AbstractPipeline):
             with profile.report("archive", dirs):
                 samples = archive.compress(samples, run_parallel)
             with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
                 for sample in samples:
-                    run_parallel("upload_samples", [sample])
+                    run_parallel("upload_samples_project", [sample])
         logger.info("Timing: finished")
         return samples
 
@@ -241,8 +245,9 @@ class StandardPipeline(AbstractPipeline):
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
             with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
                 for sample in samples:
-                    run_parallel("upload_samples", [sample])
+                    run_parallel("upload_samples_project", [sample])
         logger.info("Timing: finished")
         return samples
 
@@ -267,8 +272,9 @@ class SailfishPipeline(AbstractPipeline):
                 with profile.report("sailfish", dirs):
                     samples = run_parallel("run_sailfish", samples)
                 with profile.report("upload", dirs):
+                    samples = run_parallel("upload_samples", samples)
                     for sample in samples:
-                        run_parallel("upload_samples", [sample])
+                        run_parallel("upload_samples_project", [sample])
         return samples
 
 class RnaseqPipeline(AbstractPipeline):
@@ -315,8 +321,9 @@ class RnaseqPipeline(AbstractPipeline):
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
             with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
                 for sample in samples:
-                    run_parallel("upload_samples", [sample])
+                    run_parallel("upload_samples_project", [sample])
         logger.info("Timing: finished")
         return samples
 
@@ -342,8 +349,9 @@ class ChipseqPipeline(AbstractPipeline):
             samples = run_parallel("clean_chipseq_alignment", samples)
             samples = qcsummary.generate_parallel(samples, run_parallel)
             with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
                 for sample in samples:
-                    run_parallel("upload_samples", [sample])
+                    run_parallel("upload_samples_project", [sample])
         return samples
 
 def _get_pipeline(item):

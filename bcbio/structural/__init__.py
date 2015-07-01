@@ -7,13 +7,16 @@ import operator
 import toolz as tz
 
 from bcbio.pipeline import datadict as dd
-from bcbio.structural import cn_mops, cnvkit, delly, ensemble, lumpy, plot, validate, wham
+from bcbio.structural import (battenberg, cn_mops, cnvkit, delly, ensemble,
+                              lumpy, plot, validate, wham)
 from bcbio.variation import vcfutils
 
 _CALLERS = {}
 _BATCH_CALLERS = {"cn.mops": cn_mops.run, "cnvkit": cnvkit.run,
-                  "delly": delly.run, "lumpy": lumpy.run, "wham": wham.run}
+                  "delly": delly.run, "lumpy": lumpy.run, "wham": wham.run,
+                  "battenberg": battenberg.run}
 _NEEDS_BACKGROUND = set(["cn.mops"])
+_INITIAL_CALLERS = set(["battenberg", "cnvkit"])
 
 def _get_svcallers(data):
     svs = data["config"]["algorithm"].get("svcaller")
@@ -69,14 +72,20 @@ def finalize_sv(samples, config):
                 by_batch[batch] = [final]
     out = []
     for batch, items in by_batch.items():
-        plot_items = plot.by_regions(items)
+        if any("svplots" in dd.get_tools_on(d) for d in items):
+            plot_items = plot.by_regions(items)
+        else:
+            plot_items = items
         for data in plot_items:
             if lead_batches[dd.get_sample_name(data)] == batch:
                 out.append([data])
     return out
 
-def run(samples, run_parallel):
-    """Run structural variation detection using configured methods.
+def run(samples, run_parallel, initial_only=False):
+    """Run structural variation detection.
+
+    initial_only indicates we should run structural variation inputs, like
+    CNV calling, we can use to inform low frequency variant calling.
     """
     to_process = collections.OrderedDict()
     extras = []
@@ -99,17 +108,18 @@ def run(samples, run_parallel):
                     to_process[(svcaller, dd.get_sample_name(x))] = [x]
         else:
             extras.append([data])
-    processed = run_parallel("detect_sv", ([xs, background, xs[0]["config"]] for xs in to_process.values()))
+    processed = run_parallel("detect_sv", ([xs, background, xs[0]["config"], initial_only]
+                                           for xs in to_process.values()))
     finalized = (run_parallel("finalize_sv", [([xs[0] for xs in processed], processed[0][0]["config"])])
                  if len(processed) > 0 else [])
     return extras + finalized
 
-def detect_sv(items, all_items, config):
+def detect_sv(items, all_items, config, initial_only=False):
     """Top level parallel target for examining structural variation.
     """
     svcaller = config["algorithm"].get("svcaller_active")
     out = []
-    if svcaller:
+    if svcaller and (not initial_only or svcaller in _INITIAL_CALLERS):
         if svcaller in _CALLERS:
             assert len(items) == 1
             data = items[0]

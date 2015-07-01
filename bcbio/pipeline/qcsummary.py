@@ -19,10 +19,13 @@ try:
     plt.ioff()
 except ImportError:
     plt = None
+try:
+    from fadapa import Fadapa
+except ImportError:
+    Fadapa = None
 import pysam
 import toolz as tz
 import toolz.dicttoolz as dtz
-from fadapa import Fadapa
 
 from bcbio import bam, utils
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
@@ -287,7 +290,7 @@ class FastQCParser:
     def save_sections_into_file(self):
 
         data_file = os.path.join(self._dir, "fastqc_data.txt")
-        if os.path.exists(data_file):
+        if os.path.exists(data_file) and Fadapa:
             parser = Fadapa(data_file)
             module = [m[1] for m in parser.summary()][2:9]
             for m in module:
@@ -787,7 +790,6 @@ def _run_bamtools_stats(bam_file, data, out_dir):
             cmd += " > {tx_out_file}"
             do.run(cmd.format(**locals()), "bamtools stats", data)
     out = _parse_bamtools_stats(stats_file)
-    print out
     out.update(_parse_offtargets(bam_file))
     return out
 
@@ -811,12 +813,13 @@ def _run_gemini_stats(bam_file, data, out_dir):
             out["Transition/Transversion"] = tstv.split("\n")[1].split()[-1]
             for line in gt_counts.split("\n"):
                 parts = line.rstrip().split()
-                if len(parts) > 0 and parts[0] == data["name"][-1]:
-                    _, hom_ref, het, hom_var, _, total = parts
+                if len(parts) > 0 and parts[0] != "sample":
+                    name, hom_ref, het, hom_var, _, total = parts
+                    out[name] = {}
+                    out[name]["Variations (heterozygous)"] = int(het)
+                    out[name]["Variations (homozygous)"] = int(hom_var)
+                    # same total variations for all samples, keep that top level as well.
                     out["Variations (total)"] = int(total)
-                    out["Variations (heterozygous)"] = int(het)
-                    out["Variations (homozygous)"] = int(hom_var)
-                    break
             out["Variations (in dbSNP)"] = int(dbsnp_count.strip())
             if out.get("Variations (total)") > 0:
                 out["Variations (in dbSNP) pct"] = "%.1f%%" % (out["Variations (in dbSNP)"] /
@@ -826,8 +829,14 @@ def _run_gemini_stats(bam_file, data, out_dir):
         else:
             with open(gemini_stat_file) as in_handle:
                 out = yaml.safe_load(in_handle)
-    return out
 
+    res = {}
+    for k, v in out.iteritems():
+        if not isinstance(v, dict):
+            res.update({k: v})
+        if k == data['name'][-1]:
+            res.update(v)
+    return res
 
 ## qsignature
 

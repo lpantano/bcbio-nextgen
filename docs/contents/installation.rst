@@ -38,8 +38,9 @@ for configuring the installation process. Some useful arguments are:
 To bootstrap installation, the machine will need to have some basic
 requirements:
 
-- Python 2.6 or 2.7, with the development libraries
-  installed (the python-dev or python-devel packages).
+- Python 2.7, Python 3.x or Python 2.6 plus the argparse dependency
+  with the development libraries installed (the python-dev or python-devel
+  packages).
 - Compilers: Recent versions of gcc, g++ and gfortran. gcc 4.8.x
   is well tested, although other versions should work.
 - The git version control system (http://git-scm.com/).
@@ -104,7 +105,7 @@ your `~/.bashrc` with::
 
     export PATH=/path_to_bcbio/bin:$PATH
     export LD_LIBRARY_PATH=/path_to_bcbio/lib:$LD_LIBRARY_PATH
-    export PERL5LIB=/path_to_bcbio/lib/perl5:/path_to_bcbio/perl5/site_perl:${PERL5LIB}
+    export PERL5LIB=/path_to_bcbio/lib/perl5:${PERL5LIB}
 
 This installation process is not easily re-locatable due to absolute
 filesystem pointers within the installation directory. We plan to move

@@ -107,6 +107,14 @@ samples, pointing to this custom configuration file::
 
     bcbio_nextgen -w template project1/config/project1-template.yaml project1.csv folder/*
 
+If your sample folder contains additional BAM or fastq files you do not wish to
+include in the sample YAML configuration, you can restrict the output to only
+include samples in the metadata CSV with ``--only-metadata``. The output will
+print warnings about samples not present in the metadata file, then leave these
+out of the final output YAML::
+
+    bcbio_nextgen -w template --only-metadata project1/config/project1-template.yaml project1.csv folder/*
+
     
 .. _best-practice templates: https://github.com/chapmanb/bcbio-nextgen/tree/master/config/templates
 .. _multi-files-sample-configuration:
@@ -130,7 +138,7 @@ but having as many duplicate lines for each samples as files to be merged::
 An example of usage is::
 
 
-    python $BCBIO_PATH/scripts/utils/bcbio_prepare_samples.py --out merged --csv project1.csv
+    bcbio_prepare_samples.py --out merged --csv project1.csv
 
 The script will create the ``sample1.fastq,sample2.fastq`` in the ``merged`` folder, and a new CSV file 
 in the same folder than the input CSV :``project1-merged.csv``. Later, it can be used for bcbio::
@@ -555,6 +563,9 @@ Post-processing
   forces use of original bwa aln alignment. Without this, we use bwa mem with
   70bp or longer reads. ``fastqc`` turns off quality control FastQC usage.
   Default: [] -- all tools on.
+- ``tools_on`` Specify functionality to enable that is off by default.
+  ``svplots`` adds additional coverage and summary plots for CNVkit and
+  detected ensemble variants.
 
 .. _CRAM format: http://www.ebi.ac.uk/ena/about/cram_toolkit
 .. _GEMINI database: https://github.com/arq5x/gemini
@@ -667,6 +678,11 @@ and memory and compute resources to devote to them::
 - ``keyfile`` Specify the location of a program specific key file, obtained from
   the third party software tool. Include the path to a GATK supplied key file
   to disable the `GATK phone home`_ feature.
+
+For GATK you can individually control memory for variant calling (which uses the
+``gatk`` memory target) and for framework usage like merging and variant file
+preparation (which can optionally use the the ``gatk-framework`` target). If
+you only set ``gatk``, that specification gets used for framework calls as well.
 
 Temporary directory
 ===================

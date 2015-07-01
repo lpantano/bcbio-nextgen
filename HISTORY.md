@@ -1,9 +1,32 @@
-## 0.9.0 (in progress)
+## 0.9.1 (in progress)
+
+- Move some structural variant calling, like CNV detection, prior to variant
+  calling. Allows use of CNV calls as inputs for variant detection tools.
+- Generalize support for interaction with blob storage and graphing to support
+  alternative cloud providers. Initial support for interacting with Azure.
+  Thanks to Alexandru Coman.
+- Remove VarDict call lines where reference and alternative allele are
+  identical.
+- Fix assignment issues during prioritization with new GEMINI and sqlite.
+
+## 0.9.0 (20 June 2015)
 
 - GATK 3.4: support HaplotypeCaller by avoiding setting downsampling (-dcov)
   option by default.
 - Single sample structural variant calling: corectly handle multiple variant
   callers. Thanks to Sven-Eric Schelhorn.
+- Make VarDictJava the default caller when `vardict` specified. `vardict-perl`
+  is now required to specifically use the Perl version.
+- VarDict and VarDictJava: limit regions to 1Mb with overlaps to avoid memory
+  errors. Ignore regions without BED reads which can lead to large genomic
+  sections and memory errors.
+- VarDict and VarDictJava: annotate outputs with dbSNP.
+- Add `tools_on` configuration with `svplots` option. This turns off structural
+  variant plotting by default, which can be time consuming compared to calling.
+- Add a `--only-metadata` argument to template preparation that will only
+  include BAM or fastq files in sample YAML if they are present in the metadata
+  CSV file.
+- samblaster: support -M flag in 0.1.22 release
 - Fix VEP/GEMINI incompatibility where empty fields are included in VCF output.
 - VarDict: restrict maximum region size within a BED file to 2Mb to avoid high
   memory usage and failures for longer regions.
