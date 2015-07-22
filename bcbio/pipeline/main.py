@@ -327,6 +327,32 @@ class RnaseqPipeline(AbstractPipeline):
         logger.info("Timing: finished")
         return samples
 
+class smallRnaseqPipeline(AbstractPipeline):
+    name = "smallRNA-seq"
+
+    @classmethod
+    def run(self, config, run_info_yaml, parallel, dirs, samples):
+        with prun.start(_wres(parallel, ["picard", "cutadapt", "miraligner"]),
+                        samples, config, dirs, "trimming") as run_parallel:
+            with profile.report("organize samples", dirs):
+                samples = run_parallel("organize_samples", [[dirs, config, run_info_yaml,
+                                                             [x[0]["description"] for x in samples]]])
+            with profile.report("adapter trimming", dirs):
+                samples = run_parallel("prepare_sample", samples)
+                samples = run_parallel("trim_srna_sample", samples)
+                samples = run_parallel("seqbuster", samples)
+
+        with prun.start(_wres(parallel, ["aligner", "picard"],
+                              ensure_mem={"bowtie": 8, "bowtie2": 8, "star": 2}),
+                        samples, config, dirs, "alignment") as run_parallel:
+            with profile.report("prepare", dirs):
+                samples = run_parallel("seqcluster_prepare", [samples])
+            with profile.report("alignment", dirs):
+                samples = run_parallel("srna_alignment", [samples])
+
+
+        return samples
+
 class ChipseqPipeline(AbstractPipeline):
     name = "chip-seq"
 

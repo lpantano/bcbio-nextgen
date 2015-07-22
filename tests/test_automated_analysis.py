@@ -236,6 +236,18 @@ class AutomatedAnalysisTest(unittest.TestCase):
                   os.path.join(self.data_dir, "run_info-explant.yaml")]
             subprocess.check_call(cl)
 
+    @attr(srnaseq=True)
+    def test_srnaseq(self):
+        """Run an sRNA-seq analysis.
+        """
+        self._install_test_files(self.data_dir)
+        with make_workdir() as workdir:
+            cl = ["bcbio_nextgen.py",
+                  get_post_process_yaml(self.data_dir, workdir),
+                  os.path.join(self.data_dir, "run_info-srnaseq.yaml")]
+            subprocess.check_call(cl)
+
+
     @attr(chipseq=True)
     def test_chipseq(self):
         """
