@@ -349,6 +349,8 @@ class smallRnaseqPipeline(AbstractPipeline):
                 samples = run_parallel("seqcluster_prepare", [samples])
             with profile.report("alignment", dirs):
                 samples = run_parallel("srna_alignment", [samples])
+            with profile.report("cluster", dirs):
+                samples = run_parallel("seqcluster_cluster", [samples])
 
 
         return samples

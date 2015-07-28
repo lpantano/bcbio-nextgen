@@ -53,6 +53,10 @@ def seqcluster_prepare(*args):
     return seqcluster.run_prepare(*args)
 
 @utils.map_wrap
+def seqcluster_cluster(*args):
+    return seqcluster.run_cluster(*args)
+
+@utils.map_wrap
 def srna_alignment(*args):
     return seqcluster.run_align(*args)
 

@@ -80,7 +80,8 @@ def upgrade_bcbio(args):
             _symlink_bcbio(args, script="bcbio_prepare_samples.py")
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
-    if args.toolplus and (args.tooldir or args.upgrade != "skip"):
+    # if args.toolplus and (args.tooldir or args.upgrade != "skip"):
+    if args.toolplus:
         print("Installing additional tools")
         _install_toolplus(args)
     if args.install_data:
@@ -391,6 +392,8 @@ def _install_toolplus(args):
             _install_gemini(args.tooldir, _get_data_dir(), args)
         elif tool.name == "kraken":
             _install_kraken_db(_get_data_dir(), args)
+        elif tool.name == "mirbase":
+            _install_mirbase_db(_get_data_dir(), args)
         elif tool.name in set(["gatk", "mutect"]):
             _install_gatk_jar(tool.name, tool.fname, toolplus_manifest, system_config, toolplus_dir)
         elif tool.name in set(["protected"]):  # back compatibility
@@ -511,6 +514,18 @@ def _install_kraken_db(datadir, args):
         raise argparse.ArgumentTypeError("kraken not installed in tooldir %s." %
                                          os.path.join(tooldir, "bin", "kraken"))
 
+def _install_mirbase_db(datadir, args):
+    """
+    Install mirbase db for sRNAseq pipeline
+    """
+    out_dir = os.path.join(datadir, "genomes")
+    try:
+        import seqcluster.install as mirbase
+    except:
+        raise ImportError("Please, install seqcluster package first.")
+    with utils.chdir(out_dir):
+        mirbase.main(["mirbase"])
+
 # ## Store a local configuration file with upgrade details
 
 def _get_install_config():
@@ -602,7 +617,8 @@ def get_defaults():
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
     """
-    std_choices = set(["data", "cadd", "dbnsfp", "kraken"])
+    std_choices = set(["data", "cadd", "dbnsfp", "kraken", "mirbase"])
+    print std_choices
     if x in std_choices:
         return Tool(x, None)
     elif "=" in x and len(x.split("=")) == 2:
