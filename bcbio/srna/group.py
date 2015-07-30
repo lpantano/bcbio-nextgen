@@ -17,9 +17,11 @@ from bcbio.log import logger
 from bcbio.pipeline import datadict as dd
 from bcbio.pipeline.sample import process_alignment
 
-MAX_EDIT_DISTANCE = 2
 
 def run_prepare(data):
+    """
+    Run seqcluster prepare to merge all samples in one file
+    """
     out_dir = os.path.join(dd.get_work_dir(data[0]), "seqcluster", "prepare")
     out_dir = os.path.abspath(safe_makedir(out_dir))
     config_file = os.path.join(out_dir, "prepare.conf")
@@ -43,6 +45,9 @@ def run_prepare(data):
     return [data]
 
 def run_align(data):
+    """
+    Prepare data to run alignment step, only once for each project
+    """
     out_dir = os.path.join(dd.get_work_dir(data[0]), "seqcluster", "prepare")
     seq_out = op.join(out_dir, "seqs.fastq")
     data[0] = process_alignment(data[0], [seq_out, None])
@@ -58,18 +63,26 @@ def run_align(data):
     return [data]
 
 def run_cluster(data):
+    """
+    Run seqcluster cluster to detect smallRNA clusters
+    """
     out_dir = os.path.join(dd.get_work_dir(data[0]), "seqcluster", "cluster")
     out_dir = os.path.abspath(safe_makedir(out_dir))
     prepare_dir = op.join(dd.get_work_dir(data[0]), "seqcluster", "prepare")
     bam_file = op.join(dd.get_work_dir(data[0]), "align", "seqs.bam")
     cluster_dir = _cluster(bam_file, prepare_dir, out_dir, dd.get_ref_file(data[0]), dd.get_srna_gtf_file(data[0]))
-    return data
+    for sample in data:
+        sample["seqcluster"] = out_dir
+    return [data]
 
 def _cluster(bam_file, prepare_dir, out_dir, reference, annotation_file=None):
-    if annotation_file:
-        opts = "-g %s" % annotation_file
+    """
+    Connect to seqcluster to run cluster with python directly
+    """
     ma_file = op.join(prepare_dir, "seqs.ma")
     cl = ["cluster", "-o", out_dir, "-m", ma_file, "-a", bam_file, "-r", reference]
+    if annotation_file:
+        cl = cl + ["-g", annotation_file]
     p = argparse.ArgumentParser()
     sbp = p.add_subparsers()
     parse.add_subparser_cluster(sbp)
@@ -78,22 +91,9 @@ def _cluster(bam_file, prepare_dir, out_dir, reference, annotation_file=None):
         main_cluster.cluster(args)
     return out_dir
 
-def _update(data,  prepare_dir, bam_file, cluster_dir):
     for s in data:
         s["seqs_ma"] = os.path.join(prepare_dir, "seqs.ma")
         s["seqs_bam"] = bam_file
         s["clusters"] = os.path.join(cluster_dir, "counts.tsv")
-    return data
-
-def qc(data, args):
-    """fastqc for the sam file"""
-    sam_file = data['align']
-    out_dir = os.path.basename(sam_file) + "_fastq"
-    cmd = "fastqc {sam_file} -f sam -o {out_dir}".format(**locals())
-    if not os.path.exists(out_dir):
-        os.mkdir(out_dir)
-        do.run(cmd)
-    else:
-        logger.info("%s has already been QC, skipping." % (sam_file))
     return data
 

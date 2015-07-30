@@ -39,7 +39,7 @@ def mirbase(data):
     utils.safe_makedir(out_dir)
     out_file = op.join(out_dir, names)
     mirbase = op.abspath(op.join(dd.get_galaxy_dir(data), '..', "genomes", "mirbase"))
-    data['miraligner'] = _miraligner(data["collapse"], out_file, dd.get_species(data), mirbase, data['config'])
+    data['seqbuster'] = _miraligner(data["collapse"], out_file, dd.get_species(data), mirbase, data['config'])
     return [[data]]
 
 def _cmd_cutadapt():

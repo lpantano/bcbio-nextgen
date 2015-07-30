@@ -352,6 +352,15 @@ class smallRnaseqPipeline(AbstractPipeline):
             with profile.report("cluster", dirs):
                 samples = run_parallel("seqcluster_cluster", [samples])
 
+        with prun.start(_wres(parallel, ["picard", "fastqc"]),
+                        samples, config, dirs, "qc") as run_parallel:
+            with profile.report("quality control", dirs):
+                samples = qcsummary.generate_parallel(samples, run_parallel)
+            with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
+
+                for sample in samples:
+                    run_parallel("upload_samples_project", [sample])
 
         return samples
 

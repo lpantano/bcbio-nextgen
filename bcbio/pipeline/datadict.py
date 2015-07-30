@@ -15,7 +15,7 @@ LOOKUPS = {
     "priority_regions": {"keys": ['config', 'algorithm', 'priority_regions']},
     "gtf_file": {"keys": ['genome_resources', 'rnaseq', 'transcripts'],
                  "checker": file_exists},
-    "srna_gtf_file": {"keys": ['genome_resources', 'rnaseq', 'smallrna'],
+    "srna_gtf_file": {"keys": ['genome_resources', 'rnaseq', 'srna'],
                  "checker": file_exists},
     "gene_bed": {"keys": ['genome_resources', 'rnaseq', 'gene_bed'],
                  "checker": file_exists},
