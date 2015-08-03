@@ -33,9 +33,9 @@ REMOTES = {
     "genome_resources": "https://raw.github.com/chapmanb/bcbio-nextgen/master/config/genomes/%s-resources.yaml",
     "snpeff_dl_url": ("http://downloads.sourceforge.net/project/snpeff/databases/v{snpeff_ver}/"
                       "snpEff_v{snpeff_ver}_{genome}.zip")}
-SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
-                     "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                     "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"]
+SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5",
+                     "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
+                     "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"]
 SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc", "seq"]
 
 Tool = collections.namedtuple("Tool", ["name", "fname"])
@@ -80,8 +80,7 @@ def upgrade_bcbio(args):
             _symlink_bcbio(args, script="bcbio_prepare_samples.py")
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
-    # if args.toolplus and (args.tooldir or args.upgrade != "skip"):
-    if args.toolplus:
+    if args.toolplus and (args.tooldir or args.upgrade != "skip"):
         print("Installing additional tools")
         _install_toolplus(args)
     if args.install_data:
@@ -392,8 +391,6 @@ def _install_toolplus(args):
             _install_gemini(args.tooldir, _get_data_dir(), args)
         elif tool.name == "kraken":
             _install_kraken_db(_get_data_dir(), args)
-        elif tool.name == "mirbase":
-            _install_mirbase_db(_get_data_dir(), args)
         elif tool.name in set(["gatk", "mutect"]):
             _install_gatk_jar(tool.name, tool.fname, toolplus_manifest, system_config, toolplus_dir)
         elif tool.name in set(["protected"]):  # back compatibility
@@ -514,18 +511,6 @@ def _install_kraken_db(datadir, args):
         raise argparse.ArgumentTypeError("kraken not installed in tooldir %s." %
                                          os.path.join(tooldir, "bin", "kraken"))
 
-def _install_mirbase_db(datadir, args):
-    """
-    Install mirbase db for sRNAseq pipeline
-    """
-    out_dir = os.path.join(datadir, "genomes")
-    try:
-        import seqcluster.install as mirbase
-    except:
-        raise ImportError("Please, install seqcluster package first.")
-    with utils.chdir(out_dir):
-        mirbase.install_mirbase()
-
 # ## Store a local configuration file with upgrade details
 
 def _get_install_config():
@@ -617,8 +602,7 @@ def get_defaults():
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
     """
-    std_choices = set(["data", "cadd", "dbnsfp", "kraken", "mirbase"])
-    print std_choices
+    std_choices = set(["data", "cadd", "dbnsfp", "kraken"])
     if x in std_choices:
         return Tool(x, None)
     elif "=" in x and len(x.split("=")) == 2:

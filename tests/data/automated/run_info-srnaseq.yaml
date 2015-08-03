@@ -1,6 +1,6 @@
 upload:
   dir: upload
-fc_date: '110907'
+fc_date: '150803'
 fc_name: miRQC
 details:
   - analysis: smallRNA-seq

@@ -1,4 +1,5 @@
 import os
+import sys
 import os.path as op
 import shutil
 from collections import Counter
@@ -24,6 +25,7 @@ def trim_srna_sample(data):
     out_file = replace_directory(append_stem(in_file, ".clean"), out_dir)
     out_noadapter_file = replace_directory(append_stem(in_file, ".fragments"), out_dir)
     out_short_file = replace_directory(append_stem(in_file, ".short"), out_dir)
+    cutadapt = os.path.join(os.path.dirname(sys.executable), "cutadapt")
     cmd = _cmd_cutadapt()
     if not utils.file_exists(out_file):
         with file_transaction(out_file) as tx_out_file:
@@ -38,12 +40,12 @@ def mirbase(data):
     out_dir = os.path.join(dd.get_work_dir(data), names, "mirbase")
     utils.safe_makedir(out_dir)
     out_file = op.join(out_dir, names)
-    mirbase = op.abspath(op.join(dd.get_galaxy_dir(data), '..', "genomes", "mirbase"))
+    mirbase = op.abspath(op.dirname(dd.get_mirbase_ref(data)))
     data['seqbuster'] = _miraligner(data["collapse"], out_file, dd.get_species(data), mirbase, data['config'])
     return [[data]]
 
 def _cmd_cutadapt():
-    cmd = "cutadapt --adapter={adapter} --minimum-length=8 --untrimmed-output={out_noadapter_file} -o {tx_out_file} -m 17 --overlap=8 {in_file} --too-short-output {out_short_file}"
+    cmd = "{cutadapt} --adapter={adapter} --minimum-length=8 --untrimmed-output={out_noadapter_file} -o {tx_out_file} -m 17 --overlap=8 {in_file} --too-short-output {out_short_file}"
     return cmd
 
 def _collapse(in_file):
