@@ -1,4 +1,4 @@
-version: 18
+version: 20
 
 aliases:
   human: true
@@ -25,3 +25,6 @@ rnaseq:
   dexseq: ../rnaseq/ref-transcripts.dexseq.gff3
   refflat: ../rnaseq/ref-transcripts.refFlat
   rRNA_fa: ../rnaseq/rRNA.fa
+
+srnaseq:
+    srna-trasncripts: ../srnaseq/srna-transcripts.gtf

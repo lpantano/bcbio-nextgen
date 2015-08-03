@@ -524,7 +524,7 @@ def _install_mirbase_db(datadir, args):
     except:
         raise ImportError("Please, install seqcluster package first.")
     with utils.chdir(out_dir):
-        mirbase.main(["mirbase"])
+        mirbase.install_mirbase()
 
 # ## Store a local configuration file with upgrade details
 
