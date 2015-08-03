@@ -28,3 +28,4 @@ rnaseq:
 
 srnaseq:
     srna-trasncripts: ../srnaseq/srna-transcripts.gtf
+    mirbase: ../srnaseq/hairpin.fa
