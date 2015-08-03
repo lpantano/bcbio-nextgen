@@ -23,6 +23,7 @@ try:
     from fadapa import Fadapa
 except ImportError:
     Fadapa = None
+import pybedtools
 import pysam
 import toolz as tz
 import toolz.dicttoolz as dtz
@@ -36,6 +37,7 @@ from bcbio.provenance import do
 import bcbio.rnaseq.qc
 from bcbio.rnaseq.coverage import plot_gene_coverage
 import bcbio.pipeline.datadict as dd
+from bcbio.variation import bedutils
 from bcbio import broad
 
 # ## High level functions to generate summary
@@ -121,7 +123,8 @@ def _run_qc_tools(bam_file, data):
         to_run += [("bamtools", _run_bamtools_stats), ("gemini", _run_gemini_stats)]
     if data["analysis"].lower().startswith(("standard", "variant2")):
         to_run.append(["qsignature", _run_qsignature_generator])
-        to_run.append(("qualimap", _run_qualimap))
+        if "qualimap" in tz.get_in(("config", "algorithm", "tools_on"), data, []):
+            to_run.append(("qualimap", _run_qualimap))
     qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
     metrics = {}
     for program_name, qc_fn in to_run:
@@ -211,17 +214,17 @@ def _save_fields(sample):
                 saved["summary"]["metrics"]["Disambiguated ambiguous reads"] = disambigStats[2]
     return saved
 
-
 def _parse_disambiguate(disambiguatestatsfilename):
     """Parse disambiguation stats from given file.
     """
-    disambig_stats = [-1, -1, -1]
+    disambig_stats = [0, 0, 0]
     with open(disambiguatestatsfilename, "r") as in_handle:
-        header = in_handle.readline().strip().split("\t")
-        if header == ['sample', 'unique species A pairs', 'unique species B pairs', 'ambiguous pairs']:
-            disambig_stats_tmp = in_handle.readline().strip().split("\t")[1:]
-            if len(disambig_stats_tmp) == 3:
-                disambig_stats = [int(x) for x in disambig_stats_tmp]
+        for i, line in enumerate(in_handle):
+            fields = line.strip().split("\t")
+            if i == 0:
+                assert fields == ['sample', 'unique species A pairs', 'unique species B pairs', 'ambiguous pairs']
+            else:
+                disambig_stats = [x + int(y) for x, y in zip(disambig_stats, fields[1:])]
     return disambig_stats
 
 # ## Generate researcher specific summaries
@@ -551,16 +554,20 @@ def _parse_qualimap_metrics(report_file):
         header = table.xpath("h3")[0].text
         if header in parsers:
             out.update(parsers[header](table))
+    new_names = []
+    for metric in out:
+        new_names.append(metric + "_qualimap_1e7reads_est")
+    out = dict(zip(new_names, out.values()))
     return out
 
 def _bed_to_bed6(orig_file, out_dir):
     """Convert bed to required bed6 inputs.
     """
-    import pybedtools
     bed6_file = os.path.join(out_dir, "%s-bed6%s" % os.path.splitext(os.path.basename(orig_file)))
     if not utils.file_exists(bed6_file):
         with open(bed6_file, "w") as out_handle:
             for i, region in enumerate(list(x) for x in pybedtools.BedTool(orig_file)):
+                region = [x for x in list(region) if x]
                 fillers = [str(i), "1.0", "+"]
                 full = region + fillers[:6 - len(region)]
                 out_handle.write("\t".join(full) + "\n")
@@ -584,7 +591,7 @@ def _run_qualimap(bam_file, data, out_dir):
         species = data["genome_resources"]["aliases"].get("ensembl", "").upper()
         if species in ["HUMAN", "MOUSE"]:
             cmd += " -gd {species}"
-        regions = data["config"]["algorithm"].get("variant_regions")
+        regions = bedutils.merge_overlaps(dd.get_variant_regions(data), data)
         if regions:
             bed6_regions = _bed_to_bed6(regions, out_dir)
             cmd += " -gff {bed6_regions}"

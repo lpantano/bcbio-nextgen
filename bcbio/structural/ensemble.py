@@ -8,6 +8,7 @@ import fileinput
 import os
 import shutil
 
+import pybedtools
 import toolz as tz
 import vcf
 
@@ -21,7 +22,7 @@ from bcbio.variation import bedutils
 # ## Conversions to simplified BED files
 
 MAX_SVSIZE = 1e6  # 1Mb maximum size from callers to avoid huge calls collapsing all structural variants
-N_FILTER_CALLERS = 2  # Minimum number of callers for doing filtering of ensemble calls
+N_FILTER_CALLERS = 4  # Minimum number of callers for doing filtering of ensemble calls
 
 def _vcf_to_bed(in_file, caller, out_file):
     if in_file and in_file.endswith((".vcf", "vcf.gz")):
@@ -29,7 +30,7 @@ def _vcf_to_bed(in_file, caller, out_file):
             with open(out_file, "w") as out_handle:
                 for rec in vcf.Reader(in_handle, in_file):
                     if not rec.FILTER:
-                        if (rec.samples[0].gt_type and
+                        if (rec.samples[0].gt_type != 0 and
                               not (hasattr(rec.samples[0].data, "FT") and rec.samples[0].data.FT)):
                             start = rec.start - 1
                             end = int(rec.INFO.get("END", rec.start))
@@ -47,7 +48,6 @@ def _get_svtype(rec):
 def _cnvbed_to_bed(in_file, caller, out_file):
     """Convert cn_mops CNV based bed files into flattened BED
     """
-    import pybedtools
     with open(out_file, "w") as out_handle:
         for feat in pybedtools.BedTool(in_file):
             out_handle.write("\t".join([feat.chrom, str(feat.start), str(feat.end),
@@ -71,6 +71,7 @@ def _copy_file(in_file, caller, out_file):
 
 CALLER_TO_BED = {"lumpy": _vcf_to_bed,
                  "delly": _vcf_to_bed,
+                 "manta": _vcf_to_bed,
                  "cn_mops": _cnvbed_to_bed,
                  "wham": _copy_file,
                  "cnvkit": _cnvkit_to_bed}
@@ -92,7 +93,6 @@ def _create_bed(call, sample, work_dir, data):
 def combine_bed_by_size(input_beds, sample, work_dir, data, delim=","):
     """Combine a set of BED files, breaking into individual size chunks.
     """
-    import pybedtools
     out_file = os.path.join(work_dir, "%s-ensemble.bed" % sample)
     if len(input_beds) > 0:
         size_beds = []
@@ -133,17 +133,12 @@ def _filter_ensemble(in_bed, data):
     support_events = set(["BND", "UKN"])
     max_size = max([xs[1] for xs in validate.EVENT_SIZES[:2]])
     out_file = "%s-filter%s" % utils.splitext_plus(in_bed)
-    total_callers = collections.defaultdict(set)
-    with open(in_bed) as in_handle:
-        for line in in_handle:
-            caller_strs = line.strip().split()[3]
-            for event, caller in [x.split("_", 1) for x in caller_strs.split(",")]:
-                total_callers[validate.cnv_to_event(event, data)].add(caller)
 
     if not utils.file_uptodate(out_file, in_bed):
         with file_transaction(data, out_file) as tx_out_file:
             with open(tx_out_file, "w") as out_handle:
                 with open(in_bed) as in_handle:
+                    total_callers = validate.callers_by_event(in_bed, data)
                     for line in in_handle:
                         chrom, start, end, caller_strs = line.strip().split()[:4]
                         size = int(end) - int(start)

@@ -13,6 +13,7 @@ LOOKUPS = {
     "num_cores": {"keys": ['config', 'algorithm', 'num_cores'],
                   "default": 1},
     "priority_regions": {"keys": ['config', 'algorithm', 'priority_regions']},
+    "problem_region_dir": {"keys": ["config", "algorithm", "problem_region_dir"]},
     "gtf_file": {"keys": ['genome_resources', 'rnaseq', 'transcripts'],
                  "checker": file_exists},
     "srna_gtf_file": {"keys": ['genome_resources', 'srnaseq', 'srna-transcripts'],
@@ -34,6 +35,7 @@ LOOKUPS = {
     "ploidy": {"keys": ['config', 'algorithm', 'ploidy'], "default": 2},
     "gender": {"keys": ["metadata", "sex"], "default": ""},
     "batch": {"keys": ["metadata", "batch"]},
+    "phenotype": {"keys": ["metadata", "phenotype"], "default": ""},
     "hetcaller": {"keys": ["config", "algorithm", "hetcaller"]},
     "variantcaller": {"keys": ['config', 'algorithm', 'variantcaller']},
     "work_bam": {"keys": ["work_bam"]},
@@ -67,6 +69,8 @@ LOOKUPS = {
                     "default": False},
     "cufflinks_dir": {"keys": ['cufflinks_dir']},
     "rsem": {"keys": ["config", "algorithm", "rsem"], "default": False},
+    "transcriptome_align": {"keys": ["config", "algorithm", "transcriptome_align"],
+                            "default": False},
     "transcriptome_bam": {"keys": ["transcriptome_bam"]},
     "fpkm_isoform": {"keys": ["fpkm_isoform"]},
     "fpkm": {"keys": ["fpkm"]},
@@ -88,6 +92,13 @@ LOOKUPS = {
     "tools_off": {"keys": ["config", "algorithm", "tools_off"], "default": []},
     "tools_on": {"keys": ["config", "algorithm", "tools_on"], "default": []},
 }
+
+def get_batches(data):
+    batches = get_batch(data)
+    if batches:
+        if not isinstance(batches, (list, tuple)):
+            batches = [batches]
+        return batches
 
 def get_input_sequence_files(data, default=None):
     """

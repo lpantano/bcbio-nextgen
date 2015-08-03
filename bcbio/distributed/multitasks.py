@@ -2,9 +2,10 @@
 """
 from bcbio import heterogeneity, structural, utils, chipseq, upload
 from bcbio.bam import callable
-from bcbio.rnaseq import (sailfish, express)
 from bcbio.srna import sample as srna
 from bcbio.srna import group as seqcluster
+from bcbio.cwl import create as cwl_create
+from bcbio.rnaseq import (sailfish)
 from bcbio.ngsalign import alignprep
 from bcbio.pipeline import (archive, disambiguate, qcsummary, sample,
                             main, shared, variation, run_info, rnaseq)
@@ -231,6 +232,10 @@ def upload_samples(*args):
 @utils.map_wrap
 def upload_samples_project(*args):
     return upload.project_from_sample(*args)
+
+@utils.map_wrap
+def create_cwl(*args):
+    return cwl_create.from_world(*args)
 
 @utils.map_wrap
 def run_main(*args):

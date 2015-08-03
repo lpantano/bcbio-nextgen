@@ -100,7 +100,7 @@ def install_conda_pkgs(anaconda):
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
             "sqlalchemy", "statsmodels", "toolz", "tornado"]
-    channels = ["-c", "https://conda.binstar.org/bcbio"]
+    channels = ["-c", "bcbio"]
     subprocess.check_call([anaconda["conda"], "install", "--yes", "numpy"])
     subprocess.check_call([anaconda["conda"], "install", "--yes"] + channels + pkgs)
 
@@ -252,9 +252,9 @@ if __name__ == "__main__":
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
                         action="append", default=[],
-                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
-                                 "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                                 "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"])
+                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5"
+                                 "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
+                                 "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"])
     parser.add_argument("--aligners", help="Aligner indexes to download",
                         action="append", default=[],
                         choices=["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc"])
