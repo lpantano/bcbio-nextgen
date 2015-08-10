@@ -13,8 +13,6 @@ from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import config_utils
 from bcbio.install import _get_data_dir
 
-# ADAPTER = "AGATCGGAAGAGCAC"
-
 
 def trim_srna_sample(data):
     adapter = dd.get_adapters(data)[0]
