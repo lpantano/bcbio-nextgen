@@ -80,6 +80,7 @@ LOOKUPS = {
     "offtarget_stats": {"keys": ["regions", "offtarget_stats"]},
     "sample_callable": {"keys": ["regions", "sample_callable"]},
     "coverage_interval": {"keys": ["config", "algorithm", "coverage_interval"]},
+    "coverage_experimental": {"keys": ["config", "algorithm", "coverage_experimental"]},
     "coverage_depth_min": {"keys": ["config", "algorithm", "coverage_depth_min"],
                            "default": 4},
     "coverage_depth_max": {"keys": ["config", "algorithm", "coverage_depth_max"],

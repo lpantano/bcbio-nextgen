@@ -39,7 +39,6 @@ from bcbio.rnaseq.coverage import plot_gene_coverage
 import bcbio.pipeline.datadict as dd
 from bcbio.variation import bedutils
 from bcbio import broad
-
 # ## High level functions to generate summary
 
 
@@ -58,8 +57,8 @@ def generate_parallel(samples, run_parallel):
             data[0]["summary"]["mixup_check"] = qsign_info[0]["out_dir"]
         samples.append(data)
     samples = _add_researcher_summary(samples, summary_file)
+    samples = _coverage_summary(samples, run_parallel, summary_file)
     return samples
-
 
 def pipeline_summary(data):
     """Provide summary information on processing sample.
@@ -69,7 +68,6 @@ def pipeline_summary(data):
         logger.info("Generating summary files: %s" % str(data["name"]))
         data["summary"] = _run_qc_tools(work_bam, data)
     return [[data]]
-
 
 def prep_pdf(qc_dir, config):
     """Create PDF from HTML summary outputs in QC directory.
@@ -94,7 +92,6 @@ def prep_pdf(qc_dir, config):
             cmd = [topdf, html_fixed, out_file]
             do.run(cmd, "Convert QC HTML to PDF")
         return out_file
-
 
 def _run_qc_tools(bam_file, data):
     """Run a set of third party quality control tools, returning QC directory and metrics.
@@ -146,7 +143,6 @@ def _run_qc_tools(bam_file, data):
 
 # ## Generate project level QC summary for quickly assessing large projects
 
-
 def write_project_summary(samples, qsign_info=None):
     """Write project summary information on the provided samples.
     write out dirs, genome resources,
@@ -178,7 +174,6 @@ def write_project_summary(samples, qsign_info=None):
                        default_flow_style=False, allow_unicode=False)
     return out_file
 
-
 def _other_pipeline_samples(summary_file, cur_samples):
     """Retrieve samples produced previously by another pipeline in the summary output.
     """
@@ -190,7 +185,6 @@ def _other_pipeline_samples(summary_file, cur_samples):
                 if s["description"] not in cur_descriptions:
                     out.append(s)
     return out
-
 
 def _save_fields(sample):
     to_save = ["dirs", "genome_resources", "genome_build", "sam_ref", "metadata",
@@ -244,7 +238,6 @@ def _add_researcher_summary(samples, summary_yaml):
             data["summary"]["researcher"] = out_by_researcher[researcher]
         out.append([data])
     return out
-
 
 def _summary_csv_by_researcher(summary_yaml, researcher, descrs, data):
     """Generate a CSV file with summary information for a researcher on this project.
@@ -328,7 +321,6 @@ class FastQCParser:
         dt['sample'] = self.sample
         return dt
 
-
 def _run_gene_coverage(bam_file, data, out_dir):
     out_file = os.path.join(out_dir, "gene_coverage.pdf")
     ref_file = utils.get_in(data, ("genome_resources", "rnaseq", "transcripts"))
@@ -338,7 +330,6 @@ def _run_gene_coverage(bam_file, data, out_dir):
     with file_transaction(data, out_file) as tx_out_file:
         plot_gene_coverage(bam_file, ref_file, count_file, tx_out_file)
     return {"gene_coverage": out_file}
-
 
 def _run_kraken(data, ratio):
     """Run kraken, generating report in specified directory and parsing metrics.
@@ -381,7 +372,6 @@ def _run_kraken(data, ratio):
     metrics = _parse_kraken_output(kraken_out, db, data)
     return metrics
 
-
 def _parse_kraken_output(out_dir, db, data):
     """Parse kraken stat info comming from stderr,
        generating report with kraken-report
@@ -406,7 +396,6 @@ def _parse_kraken_output(out_dir, db, data):
     kraken.update(kraken_sum)
     return kraken
 
-
 def _summarize_kraken(fn):
     """get the value at species level"""
     kraken = {}
@@ -420,7 +409,6 @@ def _summarize_kraken(fn):
                 list_value.append(cols[0])
     kraken = {"kraken_sp": list_sp, "kraken_value": list_value}
     return kraken
-
 
 def _run_fastqc(bam_file, data, fastqc_out):
     """Run fastqc, generating report in specified directory and parsing metrics.
@@ -462,7 +450,6 @@ def _run_fastqc(bam_file, data, fastqc_out):
     stats = parser.get_fastqc_summary()
     parser.save_sections_into_file()
     return stats
-
 
 def _run_complexity(bam_file, data, out_dir):
     try:
@@ -904,7 +891,6 @@ def _run_qsignature_generator(bam_file, data, out_dir):
         return {'qsig_vcf': out_file}
     return {}
 
-
 def qsignature_summary(*samples):
     """Run SignatureCompareRelatedSimple module from qsignature tool.
 
@@ -953,7 +939,6 @@ def qsignature_summary(*samples):
     else:
         return []
 
-
 def _parse_qsignature_output(in_file, out_file, warning_file, data):
     """ Parse xml file produced by qsignature
 
@@ -997,7 +982,6 @@ def _parse_qsignature_output(in_file, out_file, warning_file, data):
                                 warn_handle.write(msg % pair)
     return error, warnings, similar
 
-
 def _slice_chr22(in_bam, data):
     """
     return only one BAM file with only chromosome 22
@@ -1015,3 +999,40 @@ def _slice_chr22(in_bam, data):
             cmd = ("{sambamba} slice -o {tx_out_file} {in_bam} {chromosome}").format(**locals())
             out = subprocess.check_output(cmd, shell=True)
     return out_file
+
+def _get_fastqc(sample):
+    return os.path.join(dd.get_work_dir(sample), "qc", dd.get_sample_name(sample), "fastqc", "fastqc_data.txt")
+
+def _prepare_data(samples):
+    data = []
+    for sample in samples:
+        sample = sample[0]
+        info = {}
+        info['name'] = dd.get_sample_name(sample)
+        info['region'] = dd.get_variant_regions(sample)
+        info['vcf'] = {'caller': sample['vrn_file']}
+        info['bam'] = {'ready': dd.get_work_bam(sample)}
+        info['reference'] = dd.get_ref_file(sample)
+        info['qc'] = {'fastqc': _get_fastqc(sample)}
+        info['config'] = sample['config']
+        data.append([info])
+    return data
+
+def _coverage_summary(samples, run_parallel, yaml_file):
+    """
+    Run coverage report for exome data
+    """
+    variants_bed = dd.get_variant_regions(samples[0][0])
+    if not dd.get_coverage_experimental(samples[0][0]):
+        return samples
+    if not variants_bed:
+        samples
+
+    from bcbiocov.prepare import bcbio_complete
+    work_dir = dd.get_work_dir(samples[0][0])
+    data = _prepare_data(samples)
+    out_dir = utils.safe_makedir(os.path.join(work_dir,"coverage_regions"))
+    qsignature_fn = os.path.join(work_dir, "qc", "qsignature", "qsignature.ma")
+    with utils.chdir(out_dir):
+        bcbio_complete(run_parallel, data, yaml.load(open(yaml_file)), out_dir, qsignature=qsignature_fn, region=variants_bed)
+    return samples
