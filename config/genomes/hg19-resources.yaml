@@ -1,4 +1,4 @@
-version: 20
+version: 21
 
 aliases:
   human: true
@@ -29,3 +29,7 @@ rnaseq:
 srnaseq:
     srna-trasncripts: ../srnaseq/srna-transcripts.gtf
     mirbase: ../srnaseq/hairpin.fa
+
+coverage:
+  coverage_problem_dir: ../coverage/problem_regions
+  MIG: ../prioritization/MIG.bed
