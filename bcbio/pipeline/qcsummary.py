@@ -1008,19 +1008,21 @@ def _prepare_data(samples):
     for sample in samples:
         sample = sample[0]
         info = {}
-        info['name'] = dd.get_sample_name(sample)
-        info['region'] = dd.get_variant_regions(sample)
-        info['vcf'] = {'caller': sample['vrn_file']}
-        info['bam'] = {'ready': dd.get_work_bam(sample)}
-        info['reference'] = dd.get_ref_file(sample)
-        info['qc'] = {'fastqc': _get_fastqc(sample)}
-        info['config'] = sample['config']
-        data.append([info])
+        if "vrn_file" in sample:
+            info['name'] = dd.get_sample_name(sample)
+            info['region'] = dd.get_variant_regions(sample)
+            info['vcf'] = {'caller': sample['vrn_file']}
+            info['bam'] = {'ready': dd.get_work_bam(sample)}
+            info['reference'] = dd.get_ref_file(sample)
+            info['qc'] = {'fastqc': _get_fastqc(sample)}
+            info['config'] = sample['config']
+            data.append([info])
     return data
 
 def _coverage_summary(samples, run_parallel, yaml_file):
     """
     Run coverage report for exome data
+    with bcbiocov package
     """
     variants_bed = dd.get_variant_regions(samples[0][0])
     if not dd.get_coverage_experimental(samples[0][0]):
