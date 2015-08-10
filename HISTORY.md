@@ -1,5 +1,14 @@
-## 0.9.1 (in progress)
+## 0.9.2 (in progress)
 
+- Support for MetaSV to prepare combined structural variant calls.
+
+## 0.9.1 (6 August 2015)
+
+- Fix novoalign to work with parallel split alignments. Thanks to Tyler Funnell.
+- Move lumpy-sv to latest version which uses lumpyexpress instead of speedseq.
+- Support the manta SV caller from Illumina. Validations: http://imgur.com/a/Gajsg
+- Remove high depth regions from structural variant calling exclusion file
+  to avoid false positives with lumpy. Thanks to Miika Ahdesmaki.
 - Move some structural variant calling, like CNV detection, prior to variant
   calling. Allows use of CNV calls as inputs for variant detection tools.
 - Generalize support for interaction with blob storage and graphing to support
@@ -8,6 +17,8 @@
 - Remove VarDict call lines where reference and alternative allele are
   identical.
 - Fix assignment issues during prioritization with new GEMINI and sqlite.
+- Support updated versions of sambamba, which provide headers for window depth
+  commands.
 
 ## 0.9.0 (20 June 2015)
 

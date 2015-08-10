@@ -1,9 +1,9 @@
-version: 20
+version: 22
 
 aliases:
   human: true
   snpeff: GRCh37.75
-  ensembl: homo_sapiens_vep_79_GRCh37
+  ensembl: homo_sapiens_vep_81_GRCh37
 
 variation:
   dbsnp: ../variation/dbsnp_138.vcf.gz
@@ -26,3 +26,7 @@ rnaseq:
   dexseq: ../rnaseq/ref-transcripts.dexseq.gff3
   refflat: ../rnaseq/ref-transcripts.refFlat
   rRNA_fa: ../rnaseq/rRNA.fa
+
+coverage:
+  coverage_problem_dir: ../coverage/problem_regions
+  MIG: ../prioritization/MIG.bed

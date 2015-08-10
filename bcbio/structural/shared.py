@@ -81,22 +81,20 @@ def prepare_exclude_file(items, base_file, chrom=None):
     """
     out_file = "%s-exclude%s.bed" % (utils.splitext_plus(base_file)[0], "-%s" % chrom if chrom else "")
     if not utils.file_exists(out_file) and not utils.file_exists(out_file + ".gz"):
-        all_vrs = _get_variant_regions(items)
-        ready_region = (shared.subset_variant_regions(tz.first(all_vrs), chrom, base_file, items)
-                        if len(all_vrs) > 0 else chrom)
         with shared.bedtools_tmpdir(items[0]):
             # Get a bedtool for the full region if no variant regions
-            if ready_region == chrom:
-                want_bedtool = callable.get_ref_bedtool(tz.get_in(["reference", "fasta", "base"], items[0]),
-                                                        items[0]["config"], chrom)
-                lcr_bed = shared.get_lcr_bed(items)
-                if lcr_bed:
-                    want_bedtool = want_bedtool.subtract(pybedtools.BedTool(lcr_bed))
-            else:
-                want_bedtool = pybedtools.BedTool(ready_region).saveas()
+            want_bedtool = callable.get_ref_bedtool(tz.get_in(["reference", "fasta", "base"], items[0]),
+                                                    items[0]["config"], chrom)
+            if chrom:
+                want_bedtool = pybedtools.BedTool(shared.subset_bed_by_chrom(want_bedtool.saveas().fn,
+                                                                             chrom, items[0]))
+            lcr_bed = shared.get_lcr_bed(items)
+            if lcr_bed:
+                want_bedtool = want_bedtool.subtract(pybedtools.BedTool(lcr_bed))
             sv_exclude_bed = _get_sv_exclude_file(items)
             if sv_exclude_bed and len(want_bedtool) > 0:
                 want_bedtool = want_bedtool.subtract(sv_exclude_bed).saveas()
+            want_bedtool = pybedtools.BedTool(shared.remove_highdepth_regions(want_bedtool.saveas().fn, items))
             with file_transaction(items[0], out_file) as tx_out_file:
                 full_bedtool = callable.get_ref_bedtool(tz.get_in(["reference", "fasta", "base"], items[0]),
                                                         items[0]["config"])
@@ -170,9 +168,10 @@ def _create_end_file(in_file, coord, params, out_file):
                     start, end = curpos, curpos + params["end_buffer"]
                 else:
                     start, end = curpos - params["end_buffer"], curpos
-                out_handle.write("\t".join([parts[0], str(start),
-                                            str(end), name])
-                                 + "\n")
+                if start > 0:
+                    out_handle.write("\t".join([parts[0], str(start),
+                                                str(end), name])
+                                     + "\n")
     return out_file
 
 def get_sv_chroms(items, exclude_file):

@@ -15,6 +15,7 @@ from bcbio.bam import ref
 from bcbio.distributed import objectstore
 from bcbio.distributed.transaction import file_transaction
 from bcbio.pipeline import config_utils
+import bcbio.pipeline.datadict as dd
 from bcbio.provenance import do
 
 def is_paired(bam_file):
@@ -54,6 +55,15 @@ def index(in_bam, config):
                 cmd = "{samtools} index {tx_bam_file}"
             do.run(cmd.format(**locals()), "Index BAM file: %s" % os.path.basename(in_bam))
     return index_file if utils.file_uptodate(index_file, in_bam) else alt_index_file
+
+def remove(in_bam):
+    """
+    remove bam file and the index if exists
+    """
+    if utils.file_exists(in_bam):
+        utils.remove_safe(in_bam)
+    if utils.file_exists(in_bam + ".bai"):
+        utils.remove_safe(in_bam + ".bai")
 
 def idxstats(in_bam, data):
     """Return BAM index stats for the given file, using samtools idxstats.
@@ -102,7 +112,7 @@ def downsample(in_bam, data, target_counts, read_filter="", always_run=False,
         if not utils.file_exists(out_file):
             with file_transaction(data, out_file) as tx_out_file:
                 sambamba = config_utils.get_program("sambamba", data["config"])
-                num_cores = data["config"]["algorithm"].get("num_cores", 1)
+                num_cores = dd.get_num_cores(data)
                 cmd = ("{sambamba} view -t {num_cores} {read_filter} -f bam -o {tx_out_file} "
                        "--subsample={ds_pct:.3} --subsampling-seed=42 {in_bam}")
                 do.run(cmd.format(**locals()), "Downsample BAM file: %s" % os.path.basename(in_bam))

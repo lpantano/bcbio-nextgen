@@ -40,13 +40,14 @@ def identify(data):
             cmd = ("sambamba depth window -t {cores} -c {min_coverage} "
                    "--window-size {window_size} {work_bam} "
                    "| head -n {sample_size} "
-                   "| cut -f 5 | {py_cl} -l 'numpy.median([float(x) for x in l])'")
+                   """| cut -f 5 | {py_cl} -l 'numpy.median([float(x) for x in l if not x.startswith("mean")])'""")
             median_cov = float(subprocess.check_output(cmd.format(**locals()), shell=True))
             if not numpy.isnan(median_cov):
                 high_thresh = int(high_multiplier * median_cov)
                 cmd = ("sambamba depth window -t {cores} -c {median_cov} "
                        "--window-size {window_size} -T {high_thresh} {work_bam} "
-                       "| {py_cl} -fx 'float(x.split()[5]) >= {high_percentage}' "
+                       "| {py_cl} -fx 'float(x.split()[5]) >= {high_percentage} "
+                       """if not x.startswith("#") else None' """
                        "| cut -f 1-3,7 > {tx_raw_file} ")
                 do.run(cmd.format(**locals()), "Identify high coverage regions")
                 with open(stats_file, "w") as out_handle:

@@ -30,6 +30,7 @@ remotes = {"requirements":
            "http://repo.continuum.io/miniconda/Miniconda-3.5.5-%s-x86_64.sh"}
 
 def main(args, sys_argv):
+    check_arguments(args)
     check_dependencies()
     with bcbio_tmpdir():
         setup_data_dir(args)
@@ -94,12 +95,12 @@ def bootstrap_bcbionextgen(anaconda, args, remotes):
     return out
 
 def install_conda_pkgs(anaconda):
-    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils", "ipython", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
             "sqlalchemy", "statsmodels", "toolz", "tornado"]
-    channels = ["-c", "https://conda.binstar.org/bcbio"]
+    channels = ["-c", "bcbio"]
     subprocess.check_call([anaconda["conda"], "install", "--yes", "numpy"])
     subprocess.check_call([anaconda["conda"], "install", "--yes"] + channels + pkgs)
 
@@ -197,14 +198,23 @@ def bcbio_tmpdir():
     os.chdir(orig_dir)
     shutil.rmtree(work_dir)
 
+def check_arguments(args):
+    """Ensure argruments are consistent and correct.
+    """
+    if args.toolplus and not args.tooldir:
+        raise argparse.ArgumentTypeError("Cannot specify --toolplus without --tooldir")
+
 def check_dependencies():
     """Ensure required tools for installation are present.
     """
     print("Checking required dependencies")
-    try:
-        subprocess.check_call(["git", "--version"])
-    except OSError:
-        raise OSError("bcbio-nextgen installer requires Git (http://git-scm.com/)")
+    for dep, msg in [(["git", "--version"], "Git (http://git-scm.com/)"),
+                     (["wget", "--version"], "wget"),
+                     (["bzip2", "-h"], "bzip2")]:
+        try:
+            subprocess.check_call(dep, stderr=subprocess.STDOUT)
+        except OSError:
+            raise OSError("bcbio-nextgen installer requires %s" % msg)
 
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
@@ -242,9 +252,9 @@ if __name__ == "__main__":
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
                         action="append", default=[],
-                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
-                                 "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                                 "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"])
+                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5"
+                                 "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
+                                 "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"])
     parser.add_argument("--aligners", help="Aligner indexes to download",
                         action="append", default=[],
                         choices=["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc"])

@@ -8,13 +8,15 @@ import toolz as tz
 
 from bcbio.pipeline import datadict as dd
 from bcbio.structural import (battenberg, cn_mops, cnvkit, delly, ensemble,
-                              lumpy, plot, validate, wham)
+                              lumpy, manta, metasv, plot, validate, wham)
 from bcbio.variation import vcfutils
 
 _CALLERS = {}
+_SOMATIC_CALLERS = {"manta": manta.run}
 _BATCH_CALLERS = {"cn.mops": cn_mops.run, "cnvkit": cnvkit.run,
                   "delly": delly.run, "lumpy": lumpy.run, "wham": wham.run,
                   "battenberg": battenberg.run}
+_ENSEMBLE_CALLERS = {"metasv": metasv.run}
 _NEEDS_BACKGROUND = set(["cn.mops"])
 _INITIAL_CALLERS = set(["battenberg", "cnvkit"])
 
@@ -32,12 +34,13 @@ def _handle_multiple_svcallers(data):
     svs = _get_svcallers(data)
     out = []
     for svcaller in svs:
-        base = copy.deepcopy(data)
-        base["config"]["algorithm"]["svcaller_active"] = svcaller
-        out.append(base)
+        if svcaller not in _ENSEMBLE_CALLERS:
+            base = copy.deepcopy(data)
+            base["config"]["algorithm"]["svcaller_active"] = svcaller
+            out.append(base)
     return out
 
-def finalize_sv(samples, config):
+def finalize_sv(samples, config, initial_only=False):
     """Combine results from multiple sv callers into a single ordered 'sv' key.
 
     Handles ensemble calling and plotting of results.
@@ -58,8 +61,11 @@ def finalize_sv(samples, config):
         final = grouped_calls[0]
         if len(sorted_svcalls) > 0:
             final_calls = reduce(operator.add, [x["sv"] for x in sorted_svcalls])
-            final_calls = ensemble.summarize(final_calls, final, grouped_calls)
-            final_calls = validate.evaluate(final, final_calls)
+            if not initial_only:
+                for caller in (c for c in _get_svcallers(final) if c in _ENSEMBLE_CALLERS):
+                    final_calls = _ENSEMBLE_CALLERS[caller](final_calls, final)
+                final_calls = ensemble.summarize(final_calls, final, grouped_calls)
+                final_calls = validate.evaluate(final, final_calls)
             final["sv"] = final_calls
         del final["config"]["algorithm"]["svcaller_active"]
         batch = dd.get_batch(final) or dd.get_sample_name(final)
@@ -96,8 +102,13 @@ def run(samples, run_parallel, initial_only=False):
             background.append(data)
             for x in ready_data:
                 svcaller = x["config"]["algorithm"].get("svcaller_active")
+                # reset SV information if we're running a second pass SV call
+                if "sv" in x:
+                    del x["sv"]
                 batch = dd.get_batch(x)
-                if svcaller in _BATCH_CALLERS and batch:
+                paired = vcfutils.get_paired_phenotype(x)
+                if ((svcaller in _BATCH_CALLERS and batch) or
+                      (svcaller in _SOMATIC_CALLERS and paired and batch)):
                     batches = batch if isinstance(batch, (list, tuple)) else [batch]
                     for b in batches:
                         try:
@@ -110,7 +121,8 @@ def run(samples, run_parallel, initial_only=False):
             extras.append([data])
     processed = run_parallel("detect_sv", ([xs, background, xs[0]["config"], initial_only]
                                            for xs in to_process.values()))
-    finalized = (run_parallel("finalize_sv", [([xs[0] for xs in processed], processed[0][0]["config"])])
+    finalized = (run_parallel("finalize_sv", [([xs[0] for xs in processed], processed[0][0]["config"],
+                                               initial_only)])
                  if len(processed) > 0 else [])
     return extras + finalized
 
@@ -125,7 +137,7 @@ def detect_sv(items, all_items, config, initial_only=False):
             data = items[0]
             data["sv"] = _CALLERS[svcaller](data)
             out.append([data])
-        elif svcaller in _BATCH_CALLERS:
+        elif svcaller in _BATCH_CALLERS or svcaller in _SOMATIC_CALLERS:
             if (svcaller in _NEEDS_BACKGROUND and
                   not vcfutils.is_paired_analysis([x.get("align_bam") for x in items], items)):
                 names = set([tz.get_in(["rgnames", "sample"], x) for x in items])
@@ -133,7 +145,7 @@ def detect_sv(items, all_items, config, initial_only=False):
                 for svdata in _BATCH_CALLERS[svcaller](items, background):
                     out.append([svdata])
             else:
-                for svdata in _BATCH_CALLERS[svcaller](items):
+                for svdata in _BATCH_CALLERS.get(svcaller, _SOMATIC_CALLERS.get(svcaller))(items):
                     out.append([svdata])
         else:
             raise ValueError("Unexpected structural variant caller: %s" % svcaller)

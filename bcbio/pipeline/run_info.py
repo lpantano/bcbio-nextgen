@@ -3,6 +3,7 @@
 This handles two methods of getting processing information: from a Galaxy
 next gen LIMS system or an on-file YAML configuration.
 """
+import collections
 from contextlib import closing
 import copy
 import itertools
@@ -26,7 +27,7 @@ from bcbio.bam.fastq import open_fastq
 ALGORITHM_NOPATH_KEYS = ["variantcaller", "realign", "recalibrate",
                          "phasing", "svcaller", "hetcaller", "jointcaller", "tools_off", "mixup_check"]
 
-def organize(dirs, config, run_info_yaml, sample_names):
+def organize(dirs, config, run_info_yaml, sample_names=None):
     """Organize run information from a passed YAML file or the Galaxy API.
 
     Creates the high level structure used for subsequent processing.
@@ -82,6 +83,11 @@ def setup_directories(work_dir, fc_dir, config, config_file):
     fastq_dir, galaxy_dir, config_dir = _get_full_paths(flowcell.get_fastq_dir(fc_dir)
                                                         if fc_dir else None,
                                                         config, config_file)
+    # check default install for tool data if not found locally
+    if not os.path.exists(os.path.join(galaxy_dir, "tool-data")):
+        _, config_file = config_utils.load_system_config(work_dir=work_dir)
+        if os.path.exists(os.path.join(os.path.dirname(config_file), "tool-data")):
+            galaxy_dir = os.path.dirname(config_file)
     return {"fastq": fastq_dir, "galaxy": galaxy_dir,
             "work": work_dir, "flowcell": fc_dir, "config": config_dir}
 
@@ -234,6 +240,32 @@ def _check_for_batch_clashes(xs):
         raise ValueError("Batch names must be unique from sample descriptions.\n"
                          "Clashing batch names: %s" % sorted(list(dups)))
 
+def _check_for_problem_somatic_batches(items, config):
+    """Identify problem batch setups for somatic calling.
+
+    We do not support multiple tumors in a single batch and VarDict(Java) does not
+    handle pooled calling, only tumor/normal.
+    """
+    to_check = []
+    for data in items:
+        data = copy.deepcopy(data)
+        data["config"] = config_utils.update_w_custom(config, data)
+        to_check.append(data)
+    data_by_batches = collections.defaultdict(list)
+    for data in to_check:
+        batches = dd.get_batches(data)
+        if batches:
+            for batch in batches:
+                data_by_batches[batch].append(data)
+    for batch, items in data_by_batches.items():
+        if vcfutils.get_paired(items):
+            vcfutils.check_paired_problems(items)
+        elif len(items) > 1:
+            vcs = list(set(tz.concat([dd.get_variantcaller(data) or [] for data in items])))
+            if any(x.lower().startswith("vardict") for x in vcs):
+                raise ValueError("VarDict does not support pooled non-tumor/normal calling, in batch %s: %s"
+                                % (batch, [dd.get_sample_name(data) for data in items]))
+
 def _check_for_misplaced(xs, subkey, other_keys):
     """Ensure configuration keys are not incorrectly nested under other keys.
     """
@@ -251,11 +283,12 @@ def _check_for_misplaced(xs, subkey, other_keys):
 
 ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "trim_reads", "adapters", "custom_trim", "kraken",
-                      "align_split_size", "quality_bin", "rsem",
+                      "align_split_size", "quality_bin", "transcriptome_align",
                       "quality_format", "write_summary", "merge_bamprep",
                       "coverage", "coverage_interval", "ploidy", "indelcaller",
                       "variantcaller", "jointcaller", "variant_regions",
-                      "effects", "mark_duplicates", "svcaller", "svvalidate", "sv_regions", "hetcaller",
+                      "effects", "mark_duplicates", "svcaller", "svvalidate",
+                      "sv_regions", "hetcaller", "problem_region_dir",
                       "recalibrate", "realign", "phasing", "validate",
                       "validate_regions", "validate_genome_build",
                       "clinical_reporting", "nomap_split_size",
@@ -268,11 +301,13 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "mixup_check", "priority_regions"] +
                      # back compatibility
                       ["coverage_depth"])
-ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr", "clinical_reporting",
-                          "fusion_mode", "rsem", "assemble_transcripts", "trim_reads",
+ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr",
+                          "clinical_reporting", "transcriptome_align",
+                          "fusion_mode", "assemble_transcripts", "trim_reads",
                           "recalibrate", "realign"])
 ALG_ALLOW_FALSE = set(["aligner", "bam_clean", "bam_sort",
-                       "effects", "phasing", "mixup_check", "indelcaller", "variantcaller"])
+                       "effects", "phasing", "mixup_check", "indelcaller",
+                       "variantcaller"])
 
 ALG_DOC_URL = "https://bcbio-nextgen.readthedocs.org/en/latest/contents/configuration.html#algorithm-parameters"
 
@@ -365,7 +400,7 @@ def _check_quality_format(items):
                              "is not supported. Supported values are %s."
                              % (SAMPLE_FORMAT.values()))
 
-        fastq_file = next((file for file in item.get('files', []) if
+        fastq_file = next((file for file in item.get('files') or [] if
                            any([ext for ext in fastq_extensions if ext in file])), None)
 
         if fastq_file and specified_format and not objectstore.is_remote(fastq_file):
@@ -413,7 +448,7 @@ def _check_jointcaller(data):
         raise ValueError("Unexpected algorithm 'jointcaller' parameter: %s\n"
                          "Supported options: %s\n" % (problem, sorted(list(allowed))))
 
-def _check_sample_config(items, in_file):
+def _check_sample_config(items, in_file, config):
     """Identify common problems in input sample configuration files.
     """
     logger.info("Checking sample YAML configuration: %s" % in_file)
@@ -421,6 +456,7 @@ def _check_sample_config(items, in_file):
     _check_for_duplicates(items, "lane")
     _check_for_duplicates(items, "description")
     _check_for_batch_clashes(items)
+    _check_for_problem_somatic_batches(items, config)
     _check_for_misplaced(items, "algorithm",
                          ["resources", "metadata", "analysis",
                           "description", "genome_build", "lane", "files"])
@@ -488,7 +524,7 @@ def _sanity_check_files(item, files):
     if msg:
         raise ValueError("%s for %s: %s" % (msg, item.get("description", ""), files))
 
-def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
+def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names=None):
     """Read run information from a passed YAML file.
     """
     with open(run_info_yaml) as in_handle:
@@ -511,7 +547,8 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
         global_vars = global_config.pop("globals", {})
         resources = global_config.pop("resources", {})
         loaded = loaded["details"]
-    loaded = [x for x in loaded if x["description"] in sample_names]
+    if sample_names:
+        loaded = [x for x in loaded if x["description"] in sample_names]
 
     run_details = []
     for i, item in enumerate(loaded):
@@ -534,7 +571,8 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
                 upload["fc_name"] = fc_name
                 upload["fc_date"] = fc_date
             upload["run_id"] = ""
-            upload["dir"] = _file_to_abs(upload["dir"], [dirs.get("work")], makedir=True)
+            if upload.get("dir"):
+                upload["dir"] = _file_to_abs(upload["dir"], [dirs.get("work")], makedir=True)
             item["upload"] = upload
         item["algorithm"] = _replace_global_vars(item["algorithm"], global_vars)
         item["algorithm"] = genome.abs_file_paths(item["algorithm"],
@@ -545,6 +583,8 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
         item["test_run"] = global_config.get("test_run", False)
         if item.get("files"):
             item["files"] = [genome.abs_file_paths(f) for f in item["files"]]
+        elif "files" in item:
+            del item["files"]
         if item.get("vrn_file") and isinstance(item["vrn_file"], basestring):
             item["vrn_file"] = vcfutils.bgzip_and_index(genome.abs_file_paths(item["vrn_file"]), config)
         item = _clean_metadata(item)
@@ -558,7 +598,7 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
             for key, val in pkvs.iteritems():
                 item["resources"][prog][key] = val
         run_details.append(item)
-    _check_sample_config(run_details, run_info_yaml)
+    _check_sample_config(run_details, run_info_yaml, config)
     return run_details
 
 def _item_is_bam(item):
@@ -571,7 +611,6 @@ def _add_algorithm_defaults(algorithm):
     Converts allowed multiple inputs into lists if specified as a single item.
     """
     defaults = {"archive": [],
-                "min_allele_fraction": 10.0,
                 "tools_off": [],
                 "tools_on": []}
     convert_to_list = set(["archive", "tools_off", "tools_on", "hetcaller"])
@@ -615,3 +654,15 @@ def clean_name(xs):
     if final[-1] == safec:
         final = final[:-1]
     return "".join(final)
+
+def prep_system(run_info_yaml, bcbio_system=None):
+    """Prepare system configuration information from an input configuration file.
+
+    This does the work of parsing the system input file and setting up directories
+    for use in 'organize'.
+    """
+    work_dir = os.getcwd()
+    config, config_file = config_utils.load_system_config(bcbio_system, work_dir)
+    dirs = setup_directories(work_dir, os.path.normpath(os.path.dirname(os.path.dirname(run_info_yaml))),
+                             config, config_file)
+    return [dirs, config, run_info_yaml]
