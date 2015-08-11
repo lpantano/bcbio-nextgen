@@ -79,10 +79,13 @@ def _evaluate_one(caller, svtype, size_range, ensemble, truth, data):
         return curcaller == "wham" and svtype in allowed and curtype in allowed[svtype]
     def is_breakend(name):
         return name.startswith("BND")
-    def in_size_range(feat):
-        minf, maxf = size_range
-        size = feat.end - feat.start
-        return size >= minf and size < maxf
+    def in_size_range(max_buffer=0):
+        def _work(feat):
+            minf, maxf = size_range
+            buffer = min(max_buffer, int(((maxf + minf) / 2.0) / 10.0))
+            size = feat.end - feat.start
+            return size >= max([0, minf - buffer]) and size < maxf + buffer
+        return _work
     def is_caller_svtype(feat):
         for name in feat.name.split(","):
             if ((name.startswith(svtype) or cnv_matches(name) or wham_matches(name) or is_breakend(name))
@@ -96,15 +99,15 @@ def _evaluate_one(caller, svtype, size_range, ensemble, truth, data):
         overlap = 0.5
     else:
         overlap = 0.8
-    efeats = pybedtools.BedTool(ensemble).filter(in_size_range).filter(is_caller_svtype).saveas().sort().merge()
-    tfeats = pybedtools.BedTool(truth).filter(in_size_range).sort().merge().saveas()
+    efeats = pybedtools.BedTool(ensemble).filter(in_size_range(0)).filter(is_caller_svtype).saveas().sort().merge()
+    tfeats = pybedtools.BedTool(truth).filter(in_size_range(0)).sort().merge().saveas()
     etotal = efeats.count()
     ttotal = tfeats.count()
     match = efeats.intersect(tfeats, u=True).sort().merge().saveas().count()
     return {"sensitivity": _stat_str(match, ttotal),
             "precision": _stat_str(match, etotal)}
 
-def _evaluate_multi(callers, truth_svtypes, ensemble, data):
+def _evaluate_multi(callers, truth_svtypes, ensemble, call_beds, data):
     out_file = "%s-validate.csv" % utils.splitext_plus(ensemble)[0]
     df_file = "%s-validate-df.csv" % utils.splitext_plus(ensemble)[0]
     if not utils.file_uptodate(out_file, ensemble) or not utils.file_uptodate(df_file, ensemble):
@@ -119,7 +122,12 @@ def _evaluate_multi(callers, truth_svtypes, ensemble, data):
                     for size in EVENT_SIZES:
                         str_size = "%s-%s" % size
                         for caller in (x for x in callers if x in total_callers[svtype] or x == "sv-ensemble"):
-                            evalout = _evaluate_one(caller, svtype, size, ensemble, truth, data)
+                            try:
+                                call_bed = call_beds[caller]
+                            except KeyError:
+                                assert caller == "sv-ensemble", caller
+                                call_bed = ensemble
+                            evalout = _evaluate_one(caller, svtype, size, call_bed, truth, data)
                             writer.writerow([svtype, str_size, caller,
                                              evalout["sensitivity"]["label"], evalout["precision"]["label"]])
                             for metric in ["sensitivity", "precision"]:
@@ -216,9 +224,11 @@ def evaluate(data, sv_calls):
     truth_sets = tz.get_in(["config", "algorithm", "svvalidate"], data)
     ensemble_callsets = [(i, x) for (i, x) in enumerate(sv_calls) if x["variantcaller"] == "sv-ensemble"]
     if truth_sets and len(ensemble_callsets) > 0:
-        callers = [x["variantcaller"] for x in sv_calls]
-        ensemble_bed = ensemble_callsets[0][-1]["vrn_file"]
-        val_summary, df_csv = _evaluate_multi(callers, truth_sets, ensemble_bed, data)
+        ensemble = ensemble_callsets[0][-1]
+        call_beds = {c: f for (c, f) in ensemble["input_beds"]}
+        ensemble_bed = ensemble["vrn_file"]
+        callers = sorted(call_beds.keys())
+        val_summary, df_csv = _evaluate_multi(callers, truth_sets, ensemble_bed, call_beds, data)
         summary_plots = _plot_evaluation(df_csv)
         ensemble_i, ensemble = ensemble_callsets[0]
         ensemble["validate"] = {"csv": val_summary, "plot": summary_plots, "df": df_csv}
