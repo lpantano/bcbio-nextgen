@@ -14,7 +14,7 @@ def _convert_bam_file(bam_in, ma_file):
     """
     Replace sequences with correct names
     """
-    seqs = read.parse_ma_file(ma_file)
+    seqs = inputs.parse_ma_file_raw(ma_file)
     bam = pysam.AlignmentFile(bam_in, "rb")
     out_file = op.splitext(bam_in) + ".sam"
     with pysam.AlignmentFile(out_file, "w", template=bam) as out_handle:
@@ -25,7 +25,6 @@ def _convert_bam_file(bam_in, ma_file):
 
 def _run(bam_file, out_dir):
     cmd = ("miRDeep2.pl")
-
 
 def mirdeep2(data):
     """
