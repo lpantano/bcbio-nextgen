@@ -352,7 +352,7 @@ class smallRnaseqPipeline(AbstractPipeline):
 
         with prun.start(_wres(parallel, ["seqcluster"],
                               ensure_mem={"seqcluster": 8}),
-                        [samples[0]], config, dirs, "alignment") as run_parallel:
+                        [samples[0]], config, dirs, "cluster") as run_parallel:
             with profile.report("cluster", dirs):
                 samples = run_parallel("seqcluster_cluster", [samples])
 

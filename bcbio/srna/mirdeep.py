@@ -6,19 +6,28 @@ import os.path as op
 import pysam
 from seqcluster.libs import inputs
 
+from bcbio import bam
+
+
+def _fake_fasta(info, out_file):
+    with open(out_file, 'w') as out_handle:
+        for name in info:
+            print >>out_handle, ">seq_%s_x%s\n%s" % (name, info[name].total(), info[name].seq)
+
 def _get_format(name, info):
-    counts = info[int(name.replace("seq_",""))].total
-    return name + "_x%" % counts
+    counts = info[int(name.replace("seq_",""))].total()
+    return name + "_x%s" % counts
 
 def _convert_bam_file(bam_in, ma_file):
     """
     Replace sequences with correct names
     """
-    seqs = inputs.parse_ma_file_raw(ma_file)
-    bam = pysam.AlignmentFile(bam_in, "rb")
-    out_file = op.splitext(bam_in) + ".sam"
-    with pysam.AlignmentFile(out_file, "w", template=bam) as out_handle:
-        for read in bam.fetch():
+    seqs, _, _ = inputs.parse_ma_file_raw(ma_file)
+    pysam.index(bam_in,  catch_stdout=False)
+    bam_handle = pysam.AlignmentFile(bam_in, "rb")
+    out_file = op.splitext(bam_in)[0] + ".sam"
+    with pysam.AlignmentFile(out_file, "w", template=bam_handle) as out_handle:
+        for read in bam_handle.fetch():
             read.query_name = _get_format(read.query_name, seqs)
             out_handle.write(read)
     return out_file
