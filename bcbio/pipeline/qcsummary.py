@@ -39,6 +39,8 @@ from bcbio.rnaseq.coverage import plot_gene_coverage
 import bcbio.pipeline.datadict as dd
 from bcbio.variation import bedutils
 from bcbio import broad
+from bcbio.variation import coverage_experimental as cov
+from bcbio.variation.coverage import decorate_problem_regions
 # ## High level functions to generate summary
 
 
@@ -57,7 +59,6 @@ def generate_parallel(samples, run_parallel):
             data[0]["summary"]["mixup_check"] = qsign_info[0]["out_dir"]
         samples.append(data)
     samples = _add_researcher_summary(samples, summary_file)
-    samples = _coverage_summary(samples, run_parallel, summary_file)
     return samples
 
 def pipeline_summary(data):
@@ -67,6 +68,10 @@ def pipeline_summary(data):
     if data["sam_ref"] is not None and work_bam and work_bam.endswith(".bam"):
         logger.info("Generating summary files: %s" % str(data["name"]))
         data["summary"] = _run_qc_tools(work_bam, data)
+    elif data["analysis"].lower().startswith("smallrna-seq"):
+        work_bam = data["clean_fastq"]
+        data["summary"] = _run_qc_tools(work_bam, data)
+
     return [[data]]
 
 def prep_pdf(qc_dir, config):
@@ -112,7 +117,7 @@ def _run_qc_tools(bam_file, data):
         to_run.append(("qualimap", _rnaseq_qualimap))
     elif data["analysis"].lower().startswith("chip-seq"):
         to_run.append(["bamtools", _run_bamtools_stats])
-    else:
+    elif not data["analysis"].lower().startswith("smallrna-seq"):
         to_run += [("bamtools", _run_bamtools_stats), ("gemini", _run_gemini_stats)]
     if data["analysis"].lower().startswith(("standard", "variant2")):
         to_run.append(["qsignature", _run_qsignature_generator])
@@ -124,11 +129,11 @@ def _run_qc_tools(bam_file, data):
         cur_qc_dir = os.path.join(qc_dir, program_name)
         cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
         metrics.update(cur_metrics)
-    ratio = bam.get_aligned_reads(bam_file, data)
     # if (ratio < 0.60 and data['config']["algorithm"].get("kraken", None) and
         # (data["analysis"].lower().startswith("rna-seq") or
         #  data["analysis"].lower().startswith("standard"))):
     if data['config']["algorithm"].get("kraken", None):
+        ratio = bam.get_aligned_reads(bam_file, data)
         cur_metrics = _run_kraken(data, ratio)
         metrics.update(cur_metrics)
 
@@ -414,7 +419,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
     """Run fastqc, generating report in specified directory and parsing metrics.
 
     Downsamples to 10 million reads to avoid excessive processing times with large
-    files, unless we're running a Standard/QC pipeline.
+    files, unless we're running a Standard/smallRNA-seq/QC pipeline.
 
     Handles fastqc 0.11+, which use a single HTML file and older versions that use
     a directory of files + images. The goal is to eventually move to only 0.11+
@@ -424,15 +429,16 @@ def _run_fastqc(bam_file, data, fastqc_out):
         work_dir = os.path.dirname(fastqc_out)
         utils.safe_makedir(work_dir)
         ds_bam = (bam.downsample(bam_file, data, 1e7)
-                  if data.get("analysis", "").lower() not in ["standard"]
+                  if data.get("analysis", "").lower() not in ["standard", "smallrna-seq"]
                   else None)
         bam_file = ds_bam if ds_bam else bam_file
-        fastqc_name = os.path.splitext(os.path.basename(bam_file))[0]
+        frmt = "bam" if bam_file.endswith("bam") else "fastq"
+        fastqc_name = utils.splitext_plus(os.path.basename(bam_file))[0]
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
             with utils.chdir(tx_tmp_dir):
                 cl = [config_utils.get_program("fastqc", data["config"]),
-                      "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, "-f", "bam", bam_file]
+                      "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, "-f", frmt, bam_file]
                 do.run(cl, "FastQC: %s" % data["name"][-1])
                 tx_fastqc_out = os.path.join(tx_tmp_dir, "%s_fastqc" % fastqc_name)
                 tx_combo_file = os.path.join(tx_tmp_dir, "%s_fastqc.html" % fastqc_name)
@@ -1000,41 +1006,122 @@ def _slice_chr22(in_bam, data):
             out = subprocess.check_output(cmd, shell=True)
     return out_file
 
-def _get_fastqc(sample):
-    return os.path.join(dd.get_work_dir(sample), "qc", dd.get_sample_name(sample), "fastqc", "fastqc_data.txt")
-
-def _prepare_data(samples):
-    data = []
-    for sample in samples:
-        sample = sample[0]
-        info = {}
-        if "vrn_file" in sample:
-            info['name'] = dd.get_sample_name(sample)
-            info['region'] = dd.get_variant_regions(sample)
-            info['vcf'] = {'caller': sample['vrn_file']}
-            info['bam'] = {'ready': dd.get_work_bam(sample)}
-            info['reference'] = dd.get_ref_file(sample)
-            info['qc'] = {'fastqc': _get_fastqc(sample)}
-            info['config'] = sample['config']
-            data.append([info])
-    return data
-
-def _coverage_summary(samples, run_parallel, yaml_file):
+def report_summary(samples, run_parallel):
     """
     Run coverage report for exome data
     with bcbiocov package
     """
-    variants_bed = dd.get_variant_regions(samples[0][0])
-    if not dd.get_coverage_experimental(samples[0][0]):
-        return samples
-    if not variants_bed:
-        samples
-
-    from bcbiocov.prepare import bcbio_complete
     work_dir = dd.get_work_dir(samples[0][0])
-    data = _prepare_data(samples)
-    out_dir = utils.safe_makedir(os.path.join(work_dir,"coverage_regions"))
+    yaml_file = os.path.join(work_dir, "project-summary.yaml")
+
+    if not dd.get_report(samples[0][0]):
+        return samples
+
+    parent_dir = utils.safe_makedir(os.path.join(work_dir,"report"))
     qsignature_fn = os.path.join(work_dir, "qc", "qsignature", "qsignature.ma")
-    with utils.chdir(out_dir):
-        bcbio_complete(run_parallel, data, yaml.load(open(yaml_file)), out_dir, qsignature=qsignature_fn, region=variants_bed)
+    with utils.chdir(parent_dir):
+
+        logger.info("copy qsignature")
+        if qsignature_fn:
+            if utils.file_exists(qsignature_fn) and not utils.file_exists("qsignature.ma"):
+                shutil.copy(qsignature_fn, "qsignature.ma")
+        logger.info("summarize metrics")
+        _merge_metrics(yaml.load(open(yaml_file)))
+
+        out_dir = utils.safe_makedir("fastqc")
+        logger.info("summarize fastqc")
+        with utils.chdir(out_dir):
+            _merge_fastq(samples)
+
+        out_dir = utils.safe_makedir("coverage")
+        out_dir = utils.safe_makedir("variants")
+        samples = run_parallel("coverage_report", samples)
+
+        try:
+            import bcbreport.prepare as bcbreport
+            bcbreport.report(parent_dir)
+        except:
+            loger.info("skipping report. No bcbreport installed.")
+            pass
+
     return samples
+
+def coverage_report(data):
+    """
+    Run heavy coverage and variants process in parallel
+    """
+    data = cov.coverage(data)
+    data = cov.variants(data)
+    problem_regions = dd.get_problem_region_dir(data)
+    name = dd.get_sample_name(data)
+    coverage = data['coverage']
+    annotated = None
+    if problem_regions and coverage:
+         annotated = decorate_problem_regions(coverage, problem_regions)
+    data['coverage'] = {'all': coverage, 'problems': annotated}
+
+    return [[data]]
+
+def _merge_metrics(yaml_data):
+    """
+    parse project.yaml file to get metrics for each bam
+    """
+    project = yaml_data
+    out_file = os.path.join("metrics", "metrics.tsv")
+    dt_together = []
+    with file_transaction(out_file) as out_tx:
+        for s in project['samples']:
+            m = s['summary']['metrics']
+            for me in m:
+                if isinstance(m[me], list):
+                    m[me] = ":".join(m[me])
+            dt = pd.DataFrame(m, index=['1'])
+            # dt = pd.DataFrame.from_dict(m)
+            dt.columns = [k.replace(" ", "_").replace("(", "").replace(")", "") for k in dt.columns]
+            dt['sample'] = s['description']
+            dt_together.append(dt)
+        dt_together = utils.rbind(dt_together)
+        dt_together.to_csv(out_tx, index=False, sep="\t")
+
+def _get_module(fastq_list, module, wide=True):
+    dt_together = []
+    for sample in fastq_list:
+        dt = []
+        itern = fastq_list[sample].clean_data(module)
+        header = itern[0]
+        total = fastq_list[sample].clean_data("Basic Statistics")[4][1]
+        for data in itern[1:]:
+            if data[0].startswith("#"):
+                header = data
+                continue
+            if wide:
+                if data[0].find("-") > -1:
+                    f, s = map(int, data[0].split("-"))
+                    for pos in range(f, s):
+                        dt.append([str(pos)] + data[1:])
+                else:
+                    dt.append(data)
+        dt = pd.DataFrame(dt)
+        dt.columns = [h.replace(" ", "_") for h in header]
+        dt['sample'] = sample
+        dt['total'] = total
+        dt_together.append(dt)
+    dt_together = utils.rbind(dt_together)
+    return dt_together
+
+def _merge_fastq(data):
+    """
+    merge all fastqc samples into one by module
+    """
+    fastqc_list = {}
+    for sample in data:
+        name = dd.get_sample_name(sample[0])
+        fn = os.path.join(dd.get_work_dir(sample[0]), "qc", dd.get_sample_name(sample[0]), "fastqc", "fastqc_data.txt")
+        fastqc_list[name] = Fadapa(fn)
+
+    module = [m[1] for m in fastqc_list[name].summary()][2:9]
+    for m in module:
+        out_file = os.path.join(m.replace(" ", "_") + ".tsv")
+        dt = _get_module(fastqc_list, m)
+        dt.to_csv(out_file, sep="\t", index=False)
+    return [data]

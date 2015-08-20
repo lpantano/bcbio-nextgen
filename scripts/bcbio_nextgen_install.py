@@ -95,11 +95,12 @@ def bootstrap_bcbionextgen(anaconda, args, remotes):
     return out
 
 def install_conda_pkgs(anaconda):
-    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils",
+            "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
-            "sqlalchemy", "statsmodels", "toolz", "tornado"]
+            "sqlalchemy", "statsmodels", "toolz", "tornado", "seqcluster_lite"]
     channels = ["-c", "bcbio"]
     subprocess.check_call([anaconda["conda"], "install", "--yes", "numpy"])
     subprocess.check_call([anaconda["conda"], "install", "--yes"] + channels + pkgs)

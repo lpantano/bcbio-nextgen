@@ -204,11 +204,12 @@ def _default_deploy_args(args):
 def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
-    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils",
+            "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
-            "sqlalchemy", "statsmodels", "toolz", "tornado"]
+            "sqlalchemy", "statsmodels", "toolz", "tornado", "seqcluster_lite"]
     channels = ["-c", "bcbio"]
     conda_bin = _get_conda_bin()
     if conda_bin:

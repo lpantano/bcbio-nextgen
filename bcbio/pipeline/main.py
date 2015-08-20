@@ -190,6 +190,11 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = population.prep_db_parallel(samples, run_parallel)
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
+
+        with prun.start(_wres(parallel, ["gatk"], ensure_mem = {"gatk": 8}),
+                        samples, config, dirs, "coverage") as run_parallel:
+            with profile.report("report", dirs):
+                samples = qcsummary.report_summary(samples, run_parallel)
             with profile.report("archive", dirs):
                 samples = archive.compress(samples, run_parallel)
             with profile.report("upload", dirs):
@@ -240,10 +245,12 @@ class StandardPipeline(AbstractPipeline):
                 samples = run_parallel("combine_sample_regions", [samples])
                 samples = region.clean_sample_data(samples)
         ## Quality control
-        with prun.start(_wres(parallel, ["fastqc", "bamtools", "samtools", "qsignature", "kraken"]),
+        with prun.start(_wres(parallel, ["fastqc", "bamtools", "qsignature", "kraken", "gatk"], ensure_mem={"gatk" : 2}),
                         samples, config, dirs, "multicore2") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
+            with profile.report("report", dirs):
+                samples = qcsummary.report_summary(samples, run_parallel)
             with profile.report("upload", dirs):
                 samples = run_parallel("upload_samples", samples)
                 for sample in samples:
@@ -325,6 +332,47 @@ class RnaseqPipeline(AbstractPipeline):
                 for sample in samples:
                     run_parallel("upload_samples_project", [sample])
         logger.info("Timing: finished")
+        return samples
+
+class smallRnaseqPipeline(AbstractPipeline):
+    name = "smallRNA-seq"
+
+    @classmethod
+    def run(self, config, run_info_yaml, parallel, dirs, samples):
+        with prun.start(_wres(parallel, ["picard", "cutadapt", "miraligner"]),
+                        samples, config, dirs, "trimming") as run_parallel:
+            with profile.report("organize samples", dirs):
+                samples = run_parallel("organize_samples", [[dirs, config, run_info_yaml,
+                                                             [x[0]["description"] for x in samples]]])
+            with profile.report("adapter trimming", dirs):
+                samples = run_parallel("prepare_sample", samples)
+                samples = run_parallel("trim_srna_sample", samples)
+                samples = run_parallel("seqbuster", samples)
+
+        with prun.start(_wres(parallel, ["aligner", "picard"],
+                              ensure_mem={"bowtie": 8, "bowtie2": 8, "star": 2}),
+                        [samples[0]], config, dirs, "alignment") as run_parallel:
+            with profile.report("prepare", dirs):
+                samples = run_parallel("seqcluster_prepare", [samples])
+            with profile.report("alignment", dirs):
+                samples = run_parallel("srna_alignment", [samples])
+
+        with prun.start(_wres(parallel, ["seqcluster"],
+                              ensure_mem={"seqcluster": 8}),
+                        [samples[0]], config, dirs, "cluster") as run_parallel:
+            with profile.report("cluster", dirs):
+                samples = run_parallel("seqcluster_cluster", [samples])
+
+        with prun.start(_wres(parallel, ["picard", "fastqc"]),
+                        samples, config, dirs, "qc") as run_parallel:
+            with profile.report("quality control", dirs):
+                samples = qcsummary.generate_parallel(samples, run_parallel)
+            with profile.report("upload", dirs):
+                samples = run_parallel("upload_samples", samples)
+
+                for sample in samples:
+                    run_parallel("upload_samples_project", [sample])
+
         return samples
 
 class ChipseqPipeline(AbstractPipeline):

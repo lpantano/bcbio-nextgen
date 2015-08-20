@@ -130,8 +130,9 @@ def _check_sample(in_bam, rgnames):
     with contextlib.closing(pysam.Samfile(in_bam, "rb")) as bamfile:
         rg = bamfile.header.get("RG", [{}])
     msgs = []
+    warnings = []
     if len(rg) > 1:
-        msgs.append("Multiple read groups found in input BAM. Expect single RG per BAM.")
+        warnings.append("Multiple read groups found in input BAM. Expect single RG per BAM.")
     elif len(rg) == 0:
         msgs.append("No read groups found in input BAM. Expect single RG per BAM.")
     elif rg[0].get("SM") != rgnames["sample"]:
@@ -141,6 +142,9 @@ def _check_sample(in_bam, rgnames):
         raise ValueError("Problems with pre-aligned input BAM file: %s\n" % (in_bam)
                          + "\n".join(msgs) +
                          "\nSetting `bam_clean: picard` in the configuration can often fix this issue.")
+    if warnings:
+        print("*** Potential problems in input BAM compared to reference:\n%s\n" %
+              "\n".join(warnings))
 
 def _check_bam_contigs(in_bam, ref_file, config):
     """Ensure a pre-aligned BAM file matches the expected reference genome.
@@ -155,7 +159,7 @@ def _check_bam_contigs(in_bam, ref_file, config):
             if bc and rc:
                 problems.append("Reference mismatch. BAM: %s Reference: %s" % (bc, rc))
             elif bc:
-                problems.append("Extra BAM chromosomes: %s" % bc)
+                warnings.append("Extra BAM chromosomes: %s" % bc)
             elif rc:
                 warnings.append("Extra reference chromosomes: %s" % rc)
     if problems:
@@ -327,13 +331,13 @@ def sort(in_bam, config, order="coordinate"):
         with file_transaction(config, sort_file) as tx_sort_file:
             tx_sort_stem = os.path.splitext(tx_sort_file)[0]
             tx_dir = utils.safe_makedir(os.path.dirname(tx_sort_file))
-            order_flag = "-n" if order is "queryname" else ""
+            order_flag = "-n" if order == "queryname" else ""
             samtools_cmd = ("{samtools} sort {order_flag} "
                             "{in_bam} {tx_sort_stem}")
             if sambamba:
                 # Use samtools compatible natural sorting
                 # https://github.com/lomereiter/sambamba/issues/132
-                order_flag = "--natural-sort" if order is "queryname" else ""
+                order_flag = "--natural-sort" if order == "queryname" else ""
                 cmd = ("{sambamba} sort -t {num_cores} {order_flag} "
                        "-o {tx_sort_file} --tmpdir={tx_dir} {in_bam}")
             else:
@@ -357,7 +361,7 @@ def sort_cmd(config, tmp_dir, named_pipe=None, order="coordinate"):
     """
     sambamba = _get_sambamba(config)
     pipe = named_pipe if named_pipe else "/dev/stdin"
-    order_flag = "-n" if order is "queryname" else ""
+    order_flag = "-n" if order == "queryname" else ""
     resources = config_utils.get_resources("samtools", config)
     num_cores = config["algorithm"].get("num_cores", 1)
     mem = config_utils.adjust_memory(resources.get("memory", "2G"), 1, "decrease").upper()

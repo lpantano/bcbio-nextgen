@@ -6,9 +6,11 @@ import collections
 from contextlib import closing
 import os
 
+import numpy
 import pybedtools
 import pysam
 import toolz as tz
+import yaml
 
 from bcbio import bam, utils
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
@@ -60,23 +62,23 @@ def has_variant_regions(items, base_file, chrom=None):
                 return False
     return True
 
-def remove_exclude_regions(orig_bed, base_file, items):
+def remove_exclude_regions(orig_bed, base_file, items, remove_entire_feature=False):
     """Remove centromere and short end regions from an existing BED file of regions to target.
     """
     out_bed = os.path.join("%s-noexclude.bed" % (utils.splitext_plus(base_file)[0]))
     exclude_bed = prepare_exclude_file(items, base_file)
     with file_transaction(items[0], out_bed) as tx_out_bed:
-        pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(exclude_bed)).saveas(tx_out_bed)
+        pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(exclude_bed),
+                                              A=remove_entire_feature).saveas(tx_out_bed)
     if utils.file_exists(out_bed):
         return out_bed
     else:
         return orig_bed
 
 def prepare_exclude_file(items, base_file, chrom=None):
-    """Prepare a BED file for exclusion, incorporating variant regions and chromosome.
+    """Prepare a BED file for exclusion.
 
-    Excludes locally repetitive regions (if `remove_lcr` is set) and
-    centromere regions, both of which contribute to long run times and
+    Excludes high depth and centromere regions which contribute to long run times and
     false positive structural variant calls.
     """
     out_file = "%s-exclude%s.bed" % (utils.splitext_plus(base_file)[0], "-%s" % chrom if chrom else "")
@@ -88,9 +90,6 @@ def prepare_exclude_file(items, base_file, chrom=None):
             if chrom:
                 want_bedtool = pybedtools.BedTool(shared.subset_bed_by_chrom(want_bedtool.saveas().fn,
                                                                              chrom, items[0]))
-            lcr_bed = shared.get_lcr_bed(items)
-            if lcr_bed:
-                want_bedtool = want_bedtool.subtract(pybedtools.BedTool(lcr_bed))
             sv_exclude_bed = _get_sv_exclude_file(items)
             if sv_exclude_bed and len(want_bedtool) > 0:
                 want_bedtool = want_bedtool.subtract(sv_exclude_bed).saveas()
@@ -260,3 +259,43 @@ def outname_from_inputs(in_files):
     while base.endswith(("-", "_", ".")):
         base = base[:-1]
     return base
+
+# -- Insert size calculation
+
+def insert_size_stats(dists):
+    """Calcualtes mean/median and MAD from distances, avoiding outliers.
+
+    MAD is the Median Absolute Deviation: http://en.wikipedia.org/wiki/Median_absolute_deviation
+    """
+    med = numpy.median(dists)
+    filter_dists = filter(lambda x: x < med + 10 * med, dists)
+    median = numpy.median(filter_dists)
+    return {"mean": float(numpy.mean(filter_dists)), "std": float(numpy.std(filter_dists)),
+            "median": float(median),
+            "mad": float(numpy.median([abs(x - median) for x in filter_dists]))}
+
+def calc_paired_insert_stats(in_bam, nsample=1000000):
+    """Retrieve statistics for paired end read insert distances.
+    """
+    dists = []
+    n = 0
+    with closing(pysam.Samfile(in_bam, "rb")) as in_pysam:
+        for read in in_pysam:
+            if read.is_proper_pair and read.is_read1:
+                n += 1
+                dists.append(abs(read.isize))
+                if n >= nsample:
+                    break
+    return insert_size_stats(dists)
+
+def calc_paired_insert_stats_save(in_bam, stat_file, nsample=1000000):
+    """Calculate paired stats, saving to a file for re-runs.
+    """
+    if utils.file_exists(stat_file):
+        with open(stat_file) as in_handle:
+            return yaml.safe_load(in_handle)
+    else:
+        stats = calc_paired_insert_stats(in_bam, nsample)
+        with open(stat_file, "w") as out_handle:
+            yaml.safe_dump(stats, out_handle, default_flow_style=False, allow_unicode=False)
+        return stats

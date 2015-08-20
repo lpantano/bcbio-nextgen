@@ -1,6 +1,21 @@
 ## 0.9.2 (in progress)
 
+- Support IPython 4.0 with ipyparallel
+- Fix bug in writing BAM and VCF indexes to final directory. Correctly add
+  indexes as bam.bai and vcf.gz.tbi.
+- Fix bug in queryname sorting on split files for feeding into diambiguation.
+  Ensure proper sorting with explicity sambamba sort. Thanks to Sven-Eric
+  Schelhorn.
+- Ensure extra FreeBayes alleles get removed prior to vcfallelicprimatives,
+  avoiding leaving incorrect genotype allele fields. Thanks to Michael
+  Schroeder.
+- Split CNVkit processing into individual components, enabling better
+  parallelization and control over parameters.
+- Genotype Lumpy structural variant calls with SVtyper.
+- Initial support for small RNA pipeline. Thanks to Lorena Pantano.
 - Support for MetaSV to prepare combined structural variant calls.
+- Add smallRNA-seq pipeline
+- Test automatic report for variants calling and standard pipeline.
 
 ## 0.9.1 (6 August 2015)
 

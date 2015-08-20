@@ -14,9 +14,14 @@ import os
 import time
 
 try:
-    import msgpack
-except ImportError:
+    import ipyparallel
+    # msgpack not working with IPython 4.0 ipyparallel
     msgpack = None
+except ImportError:
+    try:
+        import msgpack
+    except ImportError:
+        msgpack = None
 
 from bcbio import utils
 from bcbio.log import logger, get_log_dir
@@ -37,10 +42,8 @@ def create(parallel, dirs, config):
     profile_dir = utils.safe_makedir(os.path.join(dirs["work"], get_log_dir(config), "ipython"))
     has_mincores = any(x.startswith("mincores=") for x in parallel["resources"])
     cores = min(_get_common_cores(config["resources"]), parallel["system_cores"])
-    print cores
     if cores > 1 and not has_mincores:
         adj_cores = max(1, int(math.floor(cores * float(parallel.get("mem_pct", 1.0)))))
-        print adj_cores
         # if we have less scheduled cores than per machine, use the scheduled count
         if cores > parallel["cores"]:
             cores = parallel["cores"]

@@ -12,6 +12,7 @@ import os
 import toolz as tz
 import numpy as np
 import pandas as pd
+import pybedtools
 try:
     import matplotlib as mpl
     mpl.use('Agg', force=True)
@@ -27,7 +28,7 @@ from bcbio.log import logger
 from bcbio import utils
 from bcbio.pipeline import datadict as dd
 
-EVENT_SIZES = [(1, 450), (450, 2000), (2000, 4000), (4000, 20000), (20000, 60000),
+EVENT_SIZES = [(100, 450), (450, 2000), (2000, 4000), (4000, 20000), (20000, 60000),
                (60000, int(1e6))]
 
 def _stat_str(x, n):
@@ -66,17 +67,8 @@ def callers_by_event(in_bed, data):
 def _evaluate_one(caller, svtype, size_range, ensemble, truth, data):
     """Compare a ensemble results for a caller against a specific caller and SV type.
     """
-    import pybedtools
     def cnv_matches(name):
         return cnv_to_event(name, data) == svtype
-    def wham_matches(name):
-        """Flexibly handle WHAM comparisons, allowing DUP/DEL matches during comparisons.
-        """
-        allowed = {"DEL": set(["DEL", "UKN"]),
-                   "DUP": set(["DUP"]),
-                   "INV": set(["INV"])}
-        curtype, curcaller = name.split("_")[:2]
-        return curcaller == "wham" and svtype in allowed and curtype in allowed[svtype]
     def is_breakend(name):
         return name.startswith("BND")
     def in_size_range(max_buffer=0):
@@ -88,17 +80,11 @@ def _evaluate_one(caller, svtype, size_range, ensemble, truth, data):
         return _work
     def is_caller_svtype(feat):
         for name in feat.name.split(","):
-            if ((name.startswith(svtype) or cnv_matches(name) or wham_matches(name) or is_breakend(name))
+            if ((name.startswith(svtype) or cnv_matches(name) or is_breakend(name))
                   and (caller == "sv-ensemble" or name.endswith(caller))):
                 return True
         return False
     minf, maxf = size_range
-    if minf < 600:
-        overlap = 0.2
-    elif minf < 2500:
-        overlap = 0.5
-    else:
-        overlap = 0.8
     efeats = pybedtools.BedTool(ensemble).filter(in_size_range(0)).filter(is_caller_svtype).saveas().sort().merge()
     tfeats = pybedtools.BedTool(truth).filter(in_size_range(0)).sort().merge().saveas()
     etotal = efeats.count()

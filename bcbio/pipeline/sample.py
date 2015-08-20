@@ -89,10 +89,12 @@ def _add_supplemental_bams(data):
                 data[sup_key][supext] = test_file
     return data
 
-def process_alignment(data):
+def process_alignment(data, alt_input=None):
     """Do an alignment of fastq files, preparing a sorted BAM output file.
     """
     fastq1, fastq2 = dd.get_input_sequence_files(data)
+    if alt_input:
+        fastq1, fastq2 = alt_input
     config = data["config"]
     aligner = config["algorithm"].get("aligner", None)
     if fastq1 and objectstore.file_exists_or_remote(fastq1) and aligner:
@@ -157,6 +159,7 @@ def postprocess_alignment(data):
         callable_region_bed, nblock_bed, callable_bed = \
             callable.block_regions(data["work_bam"], ref_file, data)
         highdepth_bed = highdepth.identify(data)
+        bam.index(data["work_bam"], data["config"])
         sample_callable = callable.sample_callable_bed(data["work_bam"], ref_file, data)
         offtarget_stats = callable.calculate_offtarget(data["work_bam"], ref_file, data)
         data["regions"] = {"nblock": nblock_bed, "callable": callable_bed, "highdepth": highdepth_bed,
