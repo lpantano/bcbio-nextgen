@@ -340,6 +340,24 @@ def partition_all(n, iterable):
             break
         yield chunk
 
+def robust_partition_all(n, iterable):
+    """
+    replaces partition_all with a more robust version.
+    Workaround for a segfault in pybedtools when using a BedTool as an iterator:
+    https://github.com/daler/pybedtools/issues/88 for the discussion
+    """
+    it = iter(iterable)
+    while True:
+        x = []
+        for _ in range(n):
+            try:
+                x.append(it.next())
+            except StopIteration:
+                yield x
+                # Omitting this StopIteration results in a segfault!
+                raise StopIteration
+        yield x
+
 def partition(pred, iterable):
     'Use a predicate to partition entries into false entries and true entries'
     # partition(is_odd, range(10)) --> 0 2 4 6 8   and  1 3 5 7 9
@@ -604,3 +622,15 @@ def rbind(dfs):
     for d in dfs[1:]:
         df = df.append(d)
     return df
+
+def max_command_length():
+    """
+    get the maximum length of the command line, in bytes, defaulting
+    to a conservative number if not set
+    """
+    DEFAULT_MAX_LENGTH = 150000 # lowest seen so far is 200k
+    try:
+        arg_length = os.sysconf('SC_ARG_MAX')
+    except ValueError:
+        arg_length = DEFAULT_MAX_LENGTH
+    return arg_length if arg_length > 0 else DEFAULT_MAX_LENGTH
