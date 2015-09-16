@@ -1,4 +1,22 @@
-## 0.9.2 (in progress)
+## 0.9.3 (in progress)
+
+- Fix bug when using tumors with multiple normals and no CNV calling. Additional
+  tumor sample would get lost due to lack of early (CNV-based) calling. Thanks
+  to Miika Ahdesmaki.
+- Fix bug when using CNVkit on disambiguated inputs. Thanks to Miika Ahdesmaki.
+- Adjust mapping quality (MQ) filter for GATK SNP hard filters to improve sensitivity
+  http://imgur.com/a/oHRVB
+- Ensure memory specification passed to sambamba and samtools sort during
+  disambiguation and RNA-seq. Thanks to Sven-Eric Schelhorn.
+- Fix compatbility with bedtools groupby in v2.25.0, which needs short
+  parameters instead of long parameter names.
+- Allow turning off variant quality score recalibration with `tools_off: [vqsr]`
+- Generalize group size for batching gVCFs prior to joint calling with
+  `joint_group_size`. Thanks to Severine Catreux.
+- Support GEMINI 0.17.0, which does not have a --no-bcolz option since that is
+  the default.
+
+## 0.9.2 (1 September 2015)
 
 - Support IPython 4.0 with ipyparallel
 - Fix bug in writing BAM and VCF indexes to final directory. Correctly add
@@ -16,6 +34,7 @@
 - Support for MetaSV to prepare combined structural variant calls.
 - Add smallRNA-seq pipeline
 - Test automatic report for variants calling and standard pipeline.
+- Allow Cufflinks to be turned off via tools_off.
 
 ## 0.9.1 (6 August 2015)
 

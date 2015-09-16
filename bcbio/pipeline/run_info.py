@@ -264,7 +264,10 @@ def _check_for_problem_somatic_batches(items, config):
             vcs = list(set(tz.concat([dd.get_variantcaller(data) or [] for data in items])))
             if any(x.lower().startswith("vardict") for x in vcs):
                 raise ValueError("VarDict does not support pooled non-tumor/normal calling, in batch %s: %s"
-                                % (batch, [dd.get_sample_name(data) for data in items]))
+                                 % (batch, [dd.get_sample_name(data) for data in items]))
+            elif any(x.lower() == "mutect" for x in vcs):
+                raise ValueError("Mutect requires a 'phenotype: tumor' sample for calling, in batch %s: %s"
+                                 % (batch, [dd.get_sample_name(data) for data in items]))
 
 def _check_for_misplaced(xs, subkey, other_keys):
     """Ensure configuration keys are not incorrectly nested under other keys.
@@ -291,15 +294,15 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "effects", "mark_duplicates", "svcaller", "svvalidate",
                       "sv_regions", "hetcaller", "problem_region_dir",
                       "recalibrate", "realign", "phasing", "validate",
-                      "validate_regions", "validate_genome_build",
+                      "validate_regions", "validate_genome_build", "validate_method",
                       "clinical_reporting", "nomap_split_size",
                       "nomap_split_targets", "ensemble", "background",
                       "disambiguate", "strandedness", "fusion_mode",
                       "min_read_length", "coverage_depth_min",
                       "coverage_depth_max", "min_allele_fraction",
-                      "remove_lcr",
+                      "remove_lcr", "joint_group_size",
                       "archive", "tools_off", "tools_on", "assemble_transcripts",
-                      "mixup_check", "priority_regions"] +
+                      "mixup_check", "priority_regions", "expression_caller"] +
                      # back compatibility
                       ["coverage_depth"])
 ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr",

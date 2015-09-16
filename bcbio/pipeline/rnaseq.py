@@ -42,6 +42,9 @@ def quantitate_expression_parallel(samples, run_parallel):
     """
     samples = run_parallel("generate_transcript_counts", samples)
     samples = run_parallel("run_cufflinks", samples)
+    data = samples[0][0]
+    if "sailfish" in dd.get_expression_caller(data):
+        samples = run_parallel("run_sailfish", samples)
     #samples = run_parallel("run_stringtie_expression", samples)
     return samples
 
@@ -49,6 +52,7 @@ def quantitate_expression_noparallel(samples, run_parallel):
     """
     run transcript quantitation for algorithms that don't run in parallel
     """
+    data = samples[0][0]
     samples = run_parallel("run_express", samples)
     samples = run_parallel("run_dexseq", samples)
     return samples
@@ -122,6 +126,8 @@ def combine_express(samples, combined):
 
 def run_cufflinks(data):
     """Quantitate transcript expression with Cufflinks"""
+    if "cufflinks" in dd.get_tools_off(data):
+        return [[data]]
     work_bam = dd.get_work_bam(data)
     ref_file = dd.get_sam_ref(data)
     out_dir, fpkm_file, fpkm_isoform_file = cufflinks.run(work_bam, ref_file, data)
@@ -185,12 +191,18 @@ def combine_files(samples):
     # combine Cufflinks files
     fpkm_combined_file = os.path.splitext(combined)[0] + ".fpkm"
     fpkm_files = filter_missing([dd.get_fpkm(x[0]) for x in samples])
-    fpkm_combined = count.combine_count_files(fpkm_files, fpkm_combined_file)
+    if fpkm_files:
+        fpkm_combined = count.combine_count_files(fpkm_files, fpkm_combined_file)
+    else:
+        fpkm_combined = None
     fpkm_isoform_combined_file = os.path.splitext(combined)[0] + ".isoform.fpkm"
     isoform_files = filter_missing([dd.get_fpkm_isoform(x[0]) for x in samples])
-    fpkm_isoform_combined = count.combine_count_files(isoform_files,
-                                                      fpkm_isoform_combined_file,
-                                                      ".isoform.fpkm")
+    if isoform_files:
+        fpkm_isoform_combined = count.combine_count_files(isoform_files,
+                                                          fpkm_isoform_combined_file,
+                                                          ".isoform.fpkm")
+    else:
+        fpkm_isoform_combined = None
     # combine DEXseq files
     dexseq_combined_file = os.path.splitext(combined)[0] + ".dexseq"
     to_combine_dexseq = filter_missing([dd.get_dexseq_counts(data[0]) for data in samples])

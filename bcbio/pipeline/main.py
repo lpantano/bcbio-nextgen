@@ -166,7 +166,8 @@ class Variant2Pipeline(AbstractPipeline):
         ## Finalize variants, BAMs and population databases (per-sample multicore cluster)
         with prun.start(_wres(parallel, ["gatk", "gatk-vqsr", "snpeff", "bcbio_variation",
                                          "gemini", "samtools", "fastqc", "bamtools",
-                                         "bcbio-variation-recall", "qsignature"]),
+                                         "bcbio-variation-recall", "qsignature",
+                                         "svcaller"]),
                         samples, config, dirs, "multicore2") as run_parallel:
             with profile.report("joint squaring off/backfilling", dirs):
                 samples = joint.square_off(samples, run_parallel)
@@ -290,7 +291,7 @@ class RnaseqPipeline(AbstractPipeline):
     @classmethod
     def run(self, config, run_info_yaml, parallel, dirs, samples):
         with prun.start(_wres(parallel, ["picard", "cutadapt"]),
-                        samples, config, dirs, "trimming") as run_parallel:
+                        samples, config, dirs, "trimming", max_multicore=1) as run_parallel:
             with profile.report("organize samples", dirs):
                 samples = run_parallel("organize_samples", [[dirs, config, run_info_yaml,
                                                              [x[0]["description"] for x in samples]]])
@@ -339,6 +340,9 @@ class smallRnaseqPipeline(AbstractPipeline):
 
     @classmethod
     def run(self, config, run_info_yaml, parallel, dirs, samples):
+        # causes a circular import at the top level
+        from bcbio.srna.group import report as srna_report
+
         with prun.start(_wres(parallel, ["picard", "cutadapt", "miraligner"]),
                         samples, config, dirs, "trimming") as run_parallel:
             with profile.report("organize samples", dirs):
@@ -349,7 +353,7 @@ class smallRnaseqPipeline(AbstractPipeline):
                 samples = run_parallel("trim_srna_sample", samples)
                 samples = run_parallel("seqbuster", samples)
 
-        with prun.start(_wres(parallel, ["aligner", "picard"],
+        with prun.start(_wres(parallel, ["aligner", "picard", "samtools"],
                               ensure_mem={"bowtie": 8, "bowtie2": 8, "star": 2}),
                         [samples[0]], config, dirs, "alignment") as run_parallel:
             with profile.report("prepare", dirs):
@@ -367,6 +371,8 @@ class smallRnaseqPipeline(AbstractPipeline):
                         samples, config, dirs, "qc") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
+            with profile.report("report", dirs):
+                srna_report(samples)
             with profile.report("upload", dirs):
                 samples = run_parallel("upload_samples", samples)
 

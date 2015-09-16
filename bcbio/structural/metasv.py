@@ -10,9 +10,10 @@ from bcbio import utils
 from bcbio.provenance import do
 from bcbio.pipeline import datadict as dd
 from bcbio.structural import shared
+from bcbio.variation import vfilter
 
 MIN_CALLERS = 2
-SUPPORTED = set(["manta", "lumpy", "cnvkit"])
+SUPPORTED = set(["manta", "lumpy", "cnvkit", "wham"])
 
 def run(calls, data):
     """Run MetaSV if we have enough supported callers, adding output to the set of calls.
@@ -33,10 +34,17 @@ def run(calls, data):
                                                             os.path.join(tx_work_dir, "insert-stats.yaml"))
             cmd += ["--workdir", tx_work_dir, "--num_threads", str(dd.get_num_cores(data))]
             cmd += ["--spades", utils.which("spades.py"), "--age", utils.which("age_align")]
+            cmd += ["--assembly_max_tools=1", "--assembly_pad=500"]
             cmd += ["--boost_ins", "--isize_mean", ins_stats["mean"], "--isize_sd", ins_stats["std"]]
             do.run(cmd, "Combine variant calls with MetaSV")
+        filters = ("(NUM_SVTOOLS = 1 && ABS(SVLEN)>10000) || "
+                   "(NUM_SVTOOLS = 1 && ABS(SVLEN)<4000 && BA_FLANK_PERCENT>20) || "
+                   "(NUM_SVTOOLS = 1 && ABS(SVLEN)<4000 && BA_NUM_GOOD_REC=0) || "
+                   "(ABS(SVLEN)<4000 && BA_NUM_GOOD_REC>1)")
+        filter_file = vfilter.hard_w_expression(out_file, filters,
+                                                data, name="ReassemblyStats", limit_regions=None)
         calls.append({"variantcaller": "metasv",
-                      "vrn_file": out_file})
+                      "vrn_file": filter_file})
     return calls
 
 def _sv_workdir(data):

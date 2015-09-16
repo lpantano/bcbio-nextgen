@@ -33,8 +33,8 @@ def _vcf_to_bed(in_file, caller, out_file):
                     if not rec.FILTER:
                         if (rec.samples[0].gt_type != 0 and
                               not (hasattr(rec.samples[0].data, "FT") and rec.samples[0].data.FT)):
-                            start = rec.start - 1
-                            end = int(rec.INFO.get("END", rec.start))
+                            start = max(0, rec.start - 1)
+                            end = int(rec.INFO.get("END", start + 1))
                             if end - start < MAX_SVSIZE:
                                 out_handle.write("\t".join([rec.CHROM, str(start), str(end),
                                                             "%s_%s" % (_get_svtype(rec), caller)])
@@ -64,7 +64,7 @@ CALLER_TO_BED = {"lumpy": _vcf_to_bed,
                  "metasv": _vcf_to_bed,
                  "cnvkit": _vcf_to_bed,
                  "cn_mops": _cnvbed_to_bed,
-                 "wham": _copy_file}
+                 "wham": _vcf_to_bed}
 SUBSET_BY_SUPPORT = {"cnvkit": ["metasv", "lumpy", "manta"]}
 
 def _create_bed(call, sample, work_dir, calls, data):
@@ -122,7 +122,7 @@ def combine_bed_by_size(input_beds, sample, work_dir, data, delim=","):
                                 if size >= e_start and size < e_end or event == "BND":
                                     out_handle.write(line)
                                     has_regions = True
-                        if has_regions:
+                        if has_regions and utils.file_exists(all_file):
                             pybedtools.BedTool(all_file).sort(stream=True)\
                               .merge(c=4, o="distinct", delim=delim).saveas(tx_out_file)
             if utils.file_exists(size_out_file):

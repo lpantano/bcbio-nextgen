@@ -75,14 +75,21 @@ def summary(items):
                    ",".join([dd.get_sample_name(x) for x in items]))
     out_file = os.path.join(out_dir, "%s-coverage.db" % batch)
     if not utils.file_exists(out_file):
-        if coverage_bed and priority_bed:
+        if coverage_bed:
             mini_coverage = bed.minimize(coverage_bed).fn
+        if priority_bed:
             mini_priority = bed.minimize(priority_bed).fn
+        if coverage_bed and priority_bed:
             combined_bed = bed.concat([mini_coverage, mini_priority]).fn
-            clean_bed = bedutils.clean_file(combined_bed, data) if len(combined_bed) > 0 else combined_bed.fn
-            bed_file = _uniquify_bed_names(clean_bed, out_dir, data)
-        else:
-            bed_file = None
+        elif coverage_bed:
+            combined_bed = mini_coverage
+        elif priority_bed:
+            combined_bed = mini_priority
+        else: # no coverage or priority file has been set
+            return items
+        clean_bed = bedutils.clean_file(combined_bed, data) if len(combined_bed) > 0 else combined_bed.fn
+        bed_file = _uniquify_bed_names(clean_bed, out_dir, data)
+
         if bed_file and utils.file_exists(bed_file):
             with file_transaction(data, out_file) as tx_out_file:
                 chanjo = os.path.join(os.path.dirname(sys.executable), "chanjo")
@@ -239,7 +246,7 @@ def decorate_problem_regions(query_bed, problem_bed_dir):
     out_file = stem + ".problem_annotated" + ext + ".gz"
     if utils.file_exists(out_file):
         return out_file
-    bed_files = glob.glob(os.path.join(problem_bed_dir, "*.bed"))
+    bed_files = _find_bed_files(problem_bed_dir)
     bed_file_string = " ".join(bed_files)
     names = [os.path.splitext(os.path.basename(x))[0] for x in bed_files]
     names_string = " ".join(names)
@@ -252,3 +259,15 @@ def decorate_problem_regions(query_bed, problem_bed_dir):
         message = "Annotate %s with problem regions." % query_bed
         do.run(cmd.format(**locals()), message)
     return out_file
+
+def _find_bed_files(path):
+    """
+    recursively walk directories to find all of the BED files in the
+    problem regions directory
+    """
+    bed_files = []
+    for dirpath, subdirs, files in os.walk(path):
+        for x in files:
+            if x.endswith(".bed") or x.endswith(".bed.gz"):
+                bed_files.append(os.path.join(dirpath, x))
+    return bed_files

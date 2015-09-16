@@ -4,6 +4,7 @@ import collections
 import contextlib
 import csv
 import os
+import glob
 import shutil
 import subprocess
 
@@ -11,6 +12,7 @@ import pandas as pd
 import lxml.html
 import yaml
 from datetime import datetime
+from collections import defaultdict
 # allow graceful during upgrades
 try:
     import matplotlib
@@ -443,12 +445,12 @@ def _run_fastqc(bam_file, data, fastqc_out):
                 do.run(cl, "FastQC: %s" % data["name"][-1])
                 tx_fastqc_out = os.path.join(tx_tmp_dir, "%s_fastqc" % fastqc_name)
                 tx_combo_file = os.path.join(tx_tmp_dir, "%s_fastqc.html" % fastqc_name)
-                if os.path.exists("%s.zip" % tx_fastqc_out):
-                    os.remove("%s.zip" % tx_fastqc_out)
                 if not os.path.exists(sentry_file) and os.path.exists(tx_combo_file):
                     utils.safe_makedir(fastqc_out)
                     shutil.move(os.path.join(tx_fastqc_out, "fastqc_data.txt"), fastqc_out)
                     shutil.move(tx_combo_file, sentry_file)
+                    if os.path.exists("%s.zip" % tx_fastqc_out):
+                        shutil.move("%s.zip" % tx_fastqc_out, fastqc_out)
                 elif not os.path.exists(sentry_file):
                     if os.path.exists(fastqc_out):
                         shutil.rmtree(fastqc_out)
@@ -616,10 +618,14 @@ def _parse_metrics(metrics):
     for name in to_change:
         if not to_change[name]:
             continue
-        if to_change[name] == 1:
-            out.update({name: float(metrics[name])})
-        else:
-            out.update({to_change[name]: float(metrics[name])})
+        try:
+            if to_change[name] == 1:
+                out.update({name: float(metrics[name])})
+            else:
+                out.update({to_change[name]: float(metrics[name])})
+        # if we can't convert metrics[name] to float (?'s or other non-floats)
+        except ValueError:
+            continue
     return out
 
 def _detect_duplicates(bam_file, out_dir, config):
@@ -1032,7 +1038,7 @@ def report_summary(samples, run_parallel):
         out_dir = utils.safe_makedir("fastqc")
         logger.info("summarize fastqc")
         with utils.chdir(out_dir):
-            _merge_fastq(samples)
+            _merge_fastqc(samples)
 
         out_dir = utils.safe_makedir("coverage")
         out_dir = utils.safe_makedir("variants")
@@ -1042,7 +1048,7 @@ def report_summary(samples, run_parallel):
             import bcbreport.prepare as bcbreport
             bcbreport.report(parent_dir)
         except:
-            loger.info("skipping report. No bcbreport installed.")
+            logger.info("skipping report. No bcbreport installed.")
             pass
 
     return samples
@@ -1057,11 +1063,12 @@ def coverage_report(data):
     data = cov.variants(data)
     problem_regions = dd.get_problem_region_dir(data)
     name = dd.get_sample_name(data)
-    coverage = data['coverage']
-    annotated = None
-    if problem_regions and coverage:
-         annotated = decorate_problem_regions(coverage, problem_regions)
-    data['coverage'] = {'all': coverage, 'problems': annotated}
+    if "coverage" in data:
+        coverage = data['coverage']
+        annotated = None
+        if problem_regions and coverage:
+             annotated = decorate_problem_regions(coverage, problem_regions)
+        data['coverage'] = {'all': coverage, 'problems': annotated}
 
     return [[data]]
 
@@ -1086,45 +1093,24 @@ def _merge_metrics(yaml_data):
         dt_together = utils.rbind(dt_together)
         dt_together.to_csv(out_tx, index=False, sep="\t")
 
-def _get_module(fastq_list, module, wide=True):
-    dt_together = []
-    for sample in fastq_list:
-        dt = []
-        itern = fastq_list[sample].clean_data(module)
-        header = itern[0]
-        total = fastq_list[sample].clean_data("Basic Statistics")[4][1]
-        for data in itern[1:]:
-            if data[0].startswith("#"):
-                header = data
-                continue
-            if wide:
-                if data[0].find("-") > -1:
-                    f, s = map(int, data[0].split("-"))
-                    for pos in range(f, s):
-                        dt.append([str(pos)] + data[1:])
-                else:
-                    dt.append(data)
-        dt = pd.DataFrame(dt)
-        dt.columns = [h.replace(" ", "_") for h in header]
-        dt['sample'] = sample
-        dt['total'] = total
-        dt_together.append(dt)
-    dt_together = utils.rbind(dt_together)
-    return dt_together
-
-def _merge_fastq(data):
+def _merge_fastqc(data):
     """
     merge all fastqc samples into one by module
     """
-    fastqc_list = {}
+    fastqc_list = defaultdict(list)
     for sample in data:
         name = dd.get_sample_name(sample[0])
-        fn = os.path.join(dd.get_work_dir(sample[0]), "qc", dd.get_sample_name(sample[0]), "fastqc", "fastqc_data.txt")
-        fastqc_list[name] = Fadapa(fn)
-
-    module = [m[1] for m in fastqc_list[name].summary()][2:9]
-    for m in module:
-        out_file = os.path.join(m.replace(" ", "_") + ".tsv")
-        dt = _get_module(fastqc_list, m)
-        dt.to_csv(out_file, sep="\t", index=False)
+        fns = glob.glob(os.path.join(dd.get_work_dir(sample[0]), "qc", dd.get_sample_name(sample[0]), "fastqc") + "/*")
+        for fn in fns:
+            if fn.endswith("tsv"):
+                metric = os.path.basename(fn)
+                fastqc_list[metric].append([name, fn])
+    for metric in fastqc_list:
+        dt_by_sample = []
+        for fn in fastqc_list[metric]:
+            dt = pd.read_csv(fn[1], sep="\t")
+            dt['sample'] = fn[0]
+            dt_by_sample.append(dt)
+        dt = utils.rbind(dt_by_sample)
+        dt.to_csv(metric, sep="\t", index=False, mode = 'w')
     return [data]

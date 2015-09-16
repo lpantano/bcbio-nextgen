@@ -1,8 +1,8 @@
 import os
 
-from bcbio.utils import (file_exists, get_in, safe_makedir)
+import bcbio.bam as bam
+from bcbio.utils import (file_exists, safe_makedir)
 from bcbio.pipeline import config_utils
-from bcbio.log import logger
 from bcbio.bam import is_paired
 from bcbio.provenance import do
 from bcbio.distributed.transaction import file_transaction
@@ -19,6 +19,7 @@ def count(data):
     http://subread.sourceforge.net
     """
     in_bam = dd.get_work_bam(data)
+    sorted_bam = bam.sort(in_bam, dd.get_config(data), order="queryname")
     gtf_file = dd.get_gtf_file(data)
     work_dir = dd.get_work_dir(data)
     out_dir = os.path.join(work_dir, "htseq-count")
@@ -31,8 +32,10 @@ def count(data):
     paired_flag = _paired_flag(in_bam)
     strand_flag = _strand_flag(data)
 
+    filtered_bam = bam.filter_primary(sorted_bam, data)
+
     cmd = ("{featureCounts} -a {gtf_file} -o {tx_count_file} -s {strand_flag} "
-           "{paired_flag} {in_bam}")
+           "{paired_flag} {filtered_bam}")
 
     message = ("Count reads in {tx_count_file} mapping to {gtf_file} using "
                "featureCounts")

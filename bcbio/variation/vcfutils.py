@@ -4,7 +4,6 @@
 from collections import namedtuple, defaultdict
 import copy
 import gzip
-import heapq
 import itertools
 import os
 import shutil
@@ -26,7 +25,7 @@ from bcbio.variation import bamprep
 
 PairedData = namedtuple("PairedData", ["tumor_bam", "tumor_name",
                                        "normal_bam", "normal_name", "normal_panel",
-                                       "tumor_config", "tumor_data"])
+                                       "tumor_config", "tumor_data", "normal_data"])
 
 def is_paired_analysis(align_bams, items):
     """Determine if BAMs are from a tumor/normal paired analysis.
@@ -41,12 +40,13 @@ def get_paired_bams(align_bams, items):
     Allows cases with only tumor BAMs to handle callers that can work without
     normal BAMs or with normal VCF panels.
     """
-    tumor_bam, tumor_name, normal_bam, normal_name, normal_panel, tumor_config = None, None, None, None, None, None
+    tumor_bam, tumor_name, normal_bam, normal_name, normal_panel, tumor_config, normal_data = (None,) * 7
     for bamfile, item in itertools.izip(align_bams, items):
         phenotype = get_paired_phenotype(item)
         if phenotype == "normal":
             normal_bam = bamfile
             normal_name = dd.get_sample_name(item)
+            normal_data = item
         elif phenotype == "tumor":
             tumor_bam = bamfile
             tumor_name = dd.get_sample_name(item)
@@ -56,7 +56,7 @@ def get_paired_bams(align_bams, items):
     if tumor_bam or tumor_name:
         return PairedData(tumor_bam, tumor_name, normal_bam,
                           normal_name, normal_panel, tumor_config,
-                          tumor_data)
+                          tumor_data, normal_data)
 
 def check_paired_problems(items):
     """Check for incorrectly paired tumor/normal samples in a batch.
@@ -427,20 +427,23 @@ def move_vcf(orig_file, new_file):
         if os.path.exists(to_move):
             shutil.move(to_move, new_file + ext)
 
-def bgzip_and_index(in_file, config, remove_orig=True, prep_cmd="", tabix_args=None):
+def bgzip_and_index(in_file, config, remove_orig=True, prep_cmd="", tabix_args=None, out_dir=None):
     """bgzip and tabix index an input file, handling VCF and BED.
     """
     out_file = in_file if in_file.endswith(".gz") else in_file + ".gz"
+    if out_dir:
+        remove_orig = False
+        out_file = os.path.join(out_dir, os.path.basename(out_file))
     if not utils.file_exists(out_file) or not os.path.lexists(out_file):
         assert not in_file == out_file, "Input file is bgzipped but not found: %s" % in_file
         assert os.path.exists(in_file), "Input file %s not found" % in_file
         if not utils.file_uptodate(out_file, in_file):
             with file_transaction(config, out_file) as tx_out_file:
                 bgzip = tools.get_bgzip_cmd(config)
+                cat_cmd = "zcat" if in_file.endswith(".gz") else "cat"
                 if prep_cmd:
-                    cmd = "cat {in_file} | {prep_cmd} | {bgzip} -c > {tx_out_file}"
-                else:
-                    cmd = "{bgzip} -c {in_file} > {tx_out_file}"
+                    prep_cmd = "| %s " % prep_cmd
+                cmd = "{cat_cmd} {in_file} {prep_cmd} | {bgzip} -c > {tx_out_file}"
                 try:
                     do.run(cmd.format(**locals()), "bgzip %s" % os.path.basename(in_file))
                 except subprocess.CalledProcessError:
