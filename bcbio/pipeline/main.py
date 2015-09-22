@@ -152,7 +152,7 @@ class Variant2Pipeline(AbstractPipeline):
             with profile.report("coverage", dirs):
                 samples = coverage.summarize_samples(samples, run_parallel)
             with profile.report("structural variation initial", dirs):
-                samples = structural.run(samples, run_parallel, initial_only=True)
+                samples = structural.run(samples, run_parallel, "initial")
 
         ## Variant calling on sub-regions of the input file (full cluster)
         with prun.start(_wres(parallel, ["gatk", "picard", "variantcaller"]),
@@ -185,7 +185,11 @@ class Variant2Pipeline(AbstractPipeline):
             with profile.report("validation summary", dirs):
                 samples = validate.summarize_grading(samples)
             with profile.report("structural variation final", dirs):
-                samples = structural.run(samples, run_parallel)
+                samples = structural.run(samples, run_parallel, "standard")
+            with profile.report("structural variation ensemble", dirs):
+                samples = structural.run(samples, run_parallel, "ensemble")
+            with profile.report("structural variation validation", dirs):
+                samples = run_parallel("validate_sv", samples)
             with profile.report("heterogeneity", dirs):
                 samples = heterogeneity.run(samples, run_parallel)
             with profile.report("population database", dirs):
@@ -300,7 +304,7 @@ class RnaseqPipeline(AbstractPipeline):
                 samples = run_parallel("prepare_sample", samples)
                 samples = run_parallel("trim_sample", samples)
         with prun.start(_wres(parallel, ["aligner", "picard"],
-                              ensure_mem={"tophat": 8, "tophat2": 8, "star": 2}),
+                              ensure_mem={"tophat": 10, "tophat2": 10, "star": 2}),
                         samples, config, dirs, "alignment",
                         multiplier=alignprep.parallel_multiplier(samples)) as run_parallel:
             with profile.report("alignment", dirs):

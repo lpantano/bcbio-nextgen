@@ -52,7 +52,7 @@ def _filter_by_support(in_file, data):
       - Large calls need split read evidence.
     """
     rc_filter = ("FORMAT/SU < 4 || "
-                 "(FORMAT/SR == 0 && ABS(SVLEN)>20000)")
+                 "(FORMAT/SR == 0 && ABS(SVLEN)>50000)")
     return vfilter.hard_w_expression(in_file, rc_filter, data, name="ReadCountSupport",
                                      limit_regions=None)
 
@@ -127,7 +127,7 @@ def run(items):
                                             data["config"])
         gt_vcf = _run_svtyper(sample_vcf, dedup_bam, sr_bam, data)
         gt_vcfs[dd.get_sample_name(data)] = _filter_by_support(gt_vcf, data)
-    if paired:
+    if paired and paired.normal_name:
         gt_vcfs = _filter_by_background([paired.tumor_name], [paired.normal_name], gt_vcfs, paired.tumor_data)
     out = []
     for data in items:
