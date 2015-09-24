@@ -418,10 +418,9 @@ Experimental information
    will not get called. Defaults to 4. Setting lower than 4 will trigger
    low-depth calling options for GATK.
 -  ``ploidy`` Ploidy of called reads. Defaults to 2 (diploid).
-- ``coverage`` A BED file of regions to check for coverage. A `Chanjo`_
-  database of coverage and completeness is calculated over these regions and
-  regions with poor coverage are compiled in an incomplete regions file for
-  each batch.
+- ``coverage`` A BED file of regions to check for coverage. Coverage
+  and completeness are calculated over these regions and a Rmarkdown
+  report is generated in the `report` directory.
 - ``expression_caller`` A list of optional, experimental callers to turn on.
   Supports ['sailfish'].
 
@@ -602,7 +601,7 @@ parallelization
 - ``nomap_split_size`` Unmapped base pair regions required to split
   analysis into blocks. Creates islands of mapped reads surrounded by
   unmapped (or N) regions, allowing each mapped region to run in
-  parallel. (default: 100)
+  parallel. (default: 250)
 
 - ``nomap_split_targets`` Number of target intervals to attempt to
   split processing into. This picks unmapped regions evenly spaced

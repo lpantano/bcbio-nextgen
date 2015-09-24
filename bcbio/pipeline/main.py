@@ -149,8 +149,6 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = run_parallel("postprocess_alignment", samples)
                 samples = run_parallel("combine_sample_regions", [samples])
                 samples = region.clean_sample_data(samples)
-            with profile.report("coverage", dirs):
-                samples = coverage.summarize_samples(samples, run_parallel)
             with profile.report("structural variation initial", dirs):
                 samples = structural.run(samples, run_parallel, "initial")
 
@@ -197,7 +195,7 @@ class Variant2Pipeline(AbstractPipeline):
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
 
-        with prun.start(_wres(parallel, ["gatk"], ensure_mem = {"gatk": 8}),
+        with prun.start(_wres(parallel, ["gatk", "samtools"], ensure_mem = {"gatk": 8}),
                         samples, config, dirs, "coverage") as run_parallel:
             with profile.report("report", dirs):
                 samples = qcsummary.report_summary(samples, run_parallel)
