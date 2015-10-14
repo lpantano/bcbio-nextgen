@@ -18,7 +18,7 @@ import sys
 import toolz as tz
 import pybedtools
 
-from bcbio import bam, broad, utils
+from bcbio import broad, utils
 from bcbio.bam import highdepth
 from bcbio.distributed.transaction import file_transaction
 from bcbio.pipeline import config_utils, shared
@@ -104,8 +104,6 @@ def _run_vardict_caller(align_bams, items, ref_file, assoc_files,
         with file_transaction(items[0], out_file) as tx_out_file:
             target = shared.subset_variant_regions(dd.get_variant_regions(items[0]), region,
                                                    out_file, do_merge=False)
-            for align_bam in align_bams:
-                bam.index(align_bam, config)
             num_bams = len(align_bams)
             sample_vcf_names = []  # for individual sample names, given batch calling may be required
             for bamfile, item in itertools.izip(align_bams, items):
@@ -158,6 +156,72 @@ def _run_vardict_caller(align_bams, items, ref_file, assoc_files,
                 if assoc_files.get("dbsnp") else out_file)
     return out_file
 
+def _safe_to_float(x):
+    if x is None:
+        return None
+    else:
+        try:
+            return float(x)
+        except ValueError:
+            return None
+
+def depth_freq_filter(line, tumor_index, aligner):
+    """Command line to filter VarDict calls based on depth, frequency and quality.
+
+    Looks at regions with low depth for allele frequency (AF * DP < 6, the equivalent
+    of < 13bp for heterogygote calls, but generalized. Within these calls filters if a
+    calls has:
+
+    - Low mapping quality and multiple mismatches in a read (NM)
+        For bwa only: MQ < 55.0 and NM > 1.0 or MQ < 60.0 and NM > 2.0
+    - Low depth (DP < 10)
+    - Low QUAL (QUAL < 45)
+
+    Also filters in low allele frequency regions with poor quality, if all of these are
+    true:
+    - Allele frequency < 0.2
+    - Quality < 55
+    - P-value (SSF) > 0.06
+    """
+    if line.startswith("#CHROM"):
+        headers = [('##FILTER=<ID=LowAlleleDepth,Description="Low depth per allele frequency '
+                    'along with poor depth, quality, mapping quality and read mismatches.">'),
+                   ('##FILTER=<ID=LowFreqQuality,Description="Low frequency read with '
+                    'poor quality and p-value (SSF).">')]
+        return "\n".join(headers) + "\n" + line
+    elif line.startswith("#"):
+        return line
+    else:
+        parts = line.split("\t")
+        sample_ft = {a: v for (a, v) in zip(parts[8].split(":"), parts[9 + tumor_index].split(":"))}
+        qual = _safe_to_float(parts[5])
+        dp = _safe_to_float(sample_ft.get("DP"))
+        af = _safe_to_float(sample_ft.get("AF"))
+        nm = _safe_to_float(sample_ft.get("NM"))
+        mq = _safe_to_float(sample_ft.get("MQ"))
+        ssfs = [x for x in parts[7].split(";") if x.startswith("SSF=")]
+        pval = _safe_to_float(ssfs[0].split("=")[-1] if ssfs else None)
+        fname = None
+        if dp is not None and af is not None:
+            if dp * af < 6:
+                if aligner == "bwa" and nm is not None and mq is not None:
+                    if (mq < 55.0 and nm > 1.0) or (mq < 60.0 and nm > 2.0):
+                        fname = "LowAlleleDepth"
+                if dp < 10:
+                    fname = "LowAlleleDepth"
+                if qual is not None and qual < 45:
+                    fname = "LowAlleleDepth"
+        if af is not None and qual is not None and pval is not None:
+            if af < 0.2 and qual < 55 and pval > 0.06:
+                fname = "LowFreqQuality"
+        if fname:
+            if parts[6] in set([".", "PASS"]):
+                parts[6] = fname
+            else:
+                parts[6] += ";%s" % fname
+        line = "\t".join(parts)
+        return line
+
 def _run_vardict_paired(align_bams, items, ref_file, assoc_files,
                           region=None, out_file=None):
     """Detect variants with Vardict.
@@ -201,18 +265,21 @@ def _run_vardict_paired(align_bams, items, ref_file, assoc_files,
                 else:
                     somatic_filter = ("| %s -x 'bcbio.variation.freebayes.call_somatic(x)'" %
                                       os.path.join(os.path.dirname(sys.executable), "py"))
+                freq_filter = (" %s -x 'bcbio.variation.vardict.depth_freq_filter(x, %s, \"%s\")'" %
+                               (os.path.join(os.path.dirname(sys.executable), "py"),
+                                0, dd.get_aligner(paired.tumor_data)))
                 jvm_opts = _get_jvm_opts(items[0], tx_out_file)
                 cmd = ("{jvm_opts}{vardict} -G {ref_file} -f {freq} "
                        "-N {paired.tumor_name} -b \"{paired.tumor_bam}|{paired.normal_bam}\" {opts} "
                        "| {strandbias} "
-                       "| {var2vcf} -N \"{paired.tumor_name}|{paired.normal_name}\" -f {freq} {var2vcf_opts} "
+                       "| {var2vcf} -M -P 0.9 -m 4.25 -f {freq} {var2vcf_opts} "
+                       "-N \"{paired.tumor_name}|{paired.normal_name}\" "
                        "| bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ \".*Somatic\"' 2> /dev/null "
+                       "| {freq_filter} "
                        "| sed 's/\\\\.*Somatic\\\\/Somatic/' "
                        "| sed 's/REJECT,Description=\".*\">/REJECT,Description=\"Not Somatic via VarDict\">/' "
                        "{somatic_filter} | {fix_ambig} | {remove_dup} | {vcfstreamsort} "
                        "{compress_cmd} > {tx_out_file}")
-                bam.index(paired.tumor_bam, config)
-                bam.index(paired.normal_bam, config)
                 do.run(cmd.format(**locals()), "Genotyping with VarDict: Inference", {})
     out_file = (annotation.add_dbsnp(out_file, assoc_files["dbsnp"], config)
                 if assoc_files.get("dbsnp") else out_file)

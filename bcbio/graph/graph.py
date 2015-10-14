@@ -1,18 +1,22 @@
 from __future__ import print_function
 
-import collections
 from datetime import datetime
+import collections
 import functools
 import os
 import sys
+import gzip
 import pytz
 import re
+import socket
 
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import pylab
 pylab.rcParams['figure.figsize'] = (35.0, 12.0)
 import pandas as pd
+import cPickle as pickle
 
 from bcbio import utils
 from bcbio.graph.collectl import load_collectl
@@ -22,7 +26,7 @@ def get_bcbio_nodes(path):
     """Fetch the local nodes (-c local) that contain collectl files from
        the bcbio log file.
 
-       :returns: A list with unique (non-FQDN) local hostnames 
+       :returns: A list with unique (non-FQDN) local hostnames
                  where collectl raw logs can be found.
     """
     with open(path, 'r') as file_handle:
@@ -31,6 +35,11 @@ def get_bcbio_nodes(path):
             matches = re.search(r'\]\s([^:]+):', line)
             if not matches:
                 continue
+            # Format of the record will be "[Date] host: Timing: Step" if distributed,
+            # otherwise the host will be missing and it means its a local run, we can stop
+            elif 'Timing: ' in line and line.split(': ')[1] != 'Timing':
+                hosts = collections.defaultdict(dict, {socket.gethostname() : {}})
+                break
 
             hosts[matches.group(1)]
 
@@ -58,6 +67,15 @@ def get_bcbio_timings(path):
 
         return steps
 
+def plot_inline_jupyter(plot):
+    """ Plots inside the output cell of a jupyter notebook if %matplotlib magic
+        is defined.
+    """
+    try:
+        get_ipython()
+        plt.show(plot)
+    except NameError:
+        pass
 
 def this_and_prev(iterable):
     """Walk an iterable, returning the current and previous items
@@ -166,7 +184,9 @@ def graph_cpu(data_frame, steps, num_cpus):
     plot.set_ylim(0, num_cpus)
     add_common_plot_features(plot, steps)
 
-    return plot
+    plot_inline_jupyter(plot)
+
+    return plot, graph
 
 
 def graph_net_bytes(data_frame, steps, ifaces):
@@ -191,7 +211,9 @@ def graph_net_bytes(data_frame, steps, ifaces):
     plot.set_ylabel('mbits/s')
     add_common_plot_features(plot, steps)
 
-    return plot
+    plot_inline_jupyter(plot)
+
+    return plot, graph
 
 
 def graph_net_pkts(data_frame, steps, ifaces):
@@ -205,7 +227,9 @@ def graph_net_pkts(data_frame, steps, ifaces):
     plot.set_ylabel('packets/s')
     add_common_plot_features(plot, steps)
 
-    return plot
+    plot_inline_jupyter(plot)
+
+    return plot, graph
 
 
 def graph_memory(data_frame, steps, total_mem):
@@ -222,7 +246,9 @@ def graph_memory(data_frame, steps, total_mem):
     plot.set_ylim(0, total_mem)
     add_common_plot_features(plot, steps)
 
-    return plot
+    plot_inline_jupyter(plot)
+
+    return plot, graph
 
 
 def graph_disk_io(data_frame, steps, disks):
@@ -250,7 +276,9 @@ def graph_disk_io(data_frame, steps, disks):
     plot.set_ylabel('mbytes/s')
     add_common_plot_features(plot, steps)
 
-    return plot
+    plot_inline_jupyter(plot)
+
+    return plot, graph
 
 
 def log_time_frame(bcbio_log):
@@ -271,7 +299,7 @@ def rawfile_within_timeframe(rawfile, timeframe):
         ftime = datetime.strptime(matches.group(1), "%Y%m%d")
         ftime = pytz.utc.localize(ftime)
 
-    return ftime >= timeframe[0] and ftime <= timeframe[1]
+    return ftime.date() >= timeframe[0].date() and ftime.date() <= timeframe[1].date()
 
 
 def resource_usage(bcbio_log, cluster, rawdir, verbose):
@@ -281,7 +309,7 @@ def resource_usage(bcbio_log, cluster, rawdir, verbose):
     a :class pandas.DataFrame:.
 
     :param bcbio_log:   local path to bcbio log file written by the run
-    :param cluster:     
+    :param cluster:
     :param rawdir:      directory to put raw data files
     :param verbose:     increase verbosity
 
@@ -323,10 +351,14 @@ def resource_usage(bcbio_log, cluster, rawdir, verbose):
 def generate_graphs(data_frames, hardware_info, steps, outdir,
                     verbose=False):
     """Generate all graphs for a bcbio run."""
+    # Hash of hosts containing (data, hardware, steps) tuple
+    collectl_info = collections.defaultdict(dict)
+
     for host, data_frame in data_frames.iteritems():
         if verbose:
             print('Generating CPU graph for {}...'.format(host))
-        graph = graph_cpu(data_frame, steps, hardware_info[host]['num_cpus'])
+        graph, data_cpu = graph_cpu(data_frame, steps, hardware_info[host]['num_cpus'])
+
         graph.get_figure().savefig(
             os.path.join(outdir, '{}_cpu.png'.format(host)),
             bbox_inches='tight', pad_inches=0.25)
@@ -338,13 +370,13 @@ def generate_graphs(data_frames, hardware_info, steps, outdir,
 
         if verbose:
             print('Generating network graphs for {}...'.format(host))
-        graph = graph_net_bytes(data_frame, steps, ifaces)
+        graph, data_net_bytes = graph_net_bytes(data_frame, steps, ifaces)
         graph.get_figure().savefig(
             os.path.join(outdir, '{}_net_bytes.png'.format(host)),
             bbox_inches='tight', pad_inches=0.25)
         pylab.close()
 
-        graph = graph_net_pkts(data_frame, steps, ifaces)
+        graph, data_net_pkts = graph_net_pkts(data_frame, steps, ifaces)
         graph.get_figure().savefig(
             os.path.join(outdir, '{}_net_pkts.png'.format(host)),
             bbox_inches='tight', pad_inches=0.25)
@@ -352,7 +384,7 @@ def generate_graphs(data_frames, hardware_info, steps, outdir,
 
         if verbose:
             print('Generating memory graph for {}...'.format(host))
-        graph = graph_memory(data_frame, steps, hardware_info[host]["memory"])
+        graph, data_mem = graph_memory(data_frame, steps, hardware_info[host]["memory"])
         graph.get_figure().savefig(
             os.path.join(outdir, '{}_memory.png'.format(host)),
             bbox_inches='tight', pad_inches=0.25)
@@ -365,12 +397,27 @@ def generate_graphs(data_frames, hardware_info, steps, outdir,
             for series in data_frame.keys()
             if series.startswith(('sd', 'vd', 'hd', 'xvd'))
         ])
-        graph = graph_disk_io(data_frame, steps, drives)
+        graph, data_disk = graph_disk_io(data_frame, steps, drives)
         graph.get_figure().savefig(
             os.path.join(outdir, '{}_disk_io.png'.format(host)),
             bbox_inches='tight', pad_inches=0.25)
         pylab.close()
 
+        print('Serializing output to pickle object for node {}...'.format(host))
+        # "Clean" dataframes ready to be plotted
+        collectl_info[host] = { "hardware": hardware_info,
+                                "steps": steps, "cpu": data_cpu, "mem": data_mem,
+                                "disk": data_disk, "net_bytes": data_net_bytes,
+                                "net_pkts": data_net_pkts
+                              }
+    return collectl_info
+
+def serialize_plot_data(collectl_info, pre_graph_info, outdir, fname="collectl_info.pickle.gz"):
+        # Useful to regenerate and slice graphs quickly and/or inspect locally
+        collectl_pickle = os.path.join(outdir, fname)
+        print("Saving plot pickle file with all hosts on: {}".format(collectl_pickle))
+        with gzip.open(collectl_pickle, "wb") as f:
+            pickle.dump((collectl_info, pre_graph_info), f)
 
 def add_subparser(subparsers):
     parser = subparsers.add_parser(

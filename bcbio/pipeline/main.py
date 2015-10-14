@@ -194,9 +194,6 @@ class Variant2Pipeline(AbstractPipeline):
                 samples = population.prep_db_parallel(samples, run_parallel)
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
-
-        with prun.start(_wres(parallel, ["gatk", "samtools"], ensure_mem = {"gatk": 8}),
-                        samples, config, dirs, "coverage") as run_parallel:
             with profile.report("report", dirs):
                 samples = qcsummary.report_summary(samples, run_parallel)
             with profile.report("archive", dirs):
@@ -249,7 +246,7 @@ class StandardPipeline(AbstractPipeline):
                 samples = run_parallel("combine_sample_regions", [samples])
                 samples = region.clean_sample_data(samples)
         ## Quality control
-        with prun.start(_wres(parallel, ["fastqc", "bamtools", "qsignature", "kraken", "gatk"], ensure_mem={"gatk" : 2}),
+        with prun.start(_wres(parallel, ["fastqc", "bamtools", "qsignature", "kraken", "gatk", "samtools"]),
                         samples, config, dirs, "multicore2") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)
@@ -326,8 +323,8 @@ class RnaseqPipeline(AbstractPipeline):
             with profile.report("RNA-seq variant calling", dirs):
                 samples = rnaseq.rnaseq_variant_calling(samples, run_parallel)
 
-        with prun.start(_wres(parallel, ["picard", "fastqc", "qualimap", "kraken", "gatk"],
-                              ensure_mem={"qualimap": 4}),
+        with prun.start(_wres(parallel, ["samtools", "fastqc", "qualimap",
+                                         "kraken", "gatk"], ensure_mem={"qualimap": 4}),
                         samples, config, dirs, "qc") as run_parallel:
             with profile.report("quality control", dirs):
                 samples = qcsummary.generate_parallel(samples, run_parallel)

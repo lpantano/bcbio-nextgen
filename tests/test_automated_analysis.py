@@ -60,8 +60,7 @@ def get_post_process_yaml(data_dir, workdir):
             _, system = load_system_config("bcbio_system.yaml")
         except ValueError:
             system = None
-    #if system is None or not os.path.exists(system):
-    if True:
+    if system is None or not os.path.exists(system):
         system = os.path.join(data_dir, "post_process-sample.yaml")
     # create local config pointing to reduced genomes
     test_system = os.path.join(workdir, "bcbio_system.yaml")
@@ -110,7 +109,7 @@ class AutomatedAnalysisTest(unittest.TestCase):
         subprocess.check_call(cl)
         cl = ["tar", "-xzvpf", os.path.basename(url)]
         subprocess.check_call(cl)
-        os.rename(os.path.basename(dirname), dirname)
+        shutil.move(os.path.basename(dirname), dirname)
         os.remove(os.path.basename(url))
 
     @attr(speed=3)
@@ -193,6 +192,7 @@ class AutomatedAnalysisTest(unittest.TestCase):
             subprocess.check_call(cl)
 
     @attr(rnaseq=True)
+    @attr(rnaseq_standard=True)
     @attr(star=True)
     def test_2_star(self):
         """Run an RNA-seq analysis with STAR and generate gene-level counts.
@@ -203,20 +203,6 @@ class AutomatedAnalysisTest(unittest.TestCase):
                   get_post_process_yaml(self.data_dir, workdir),
                   os.path.join(self.data_dir, os.pardir, "110907_ERP000591"),
                   os.path.join(self.data_dir, "run_info-star.yaml")]
-            subprocess.check_call(cl)
-
-    @attr(rnaseq=True)
-    @attr(star=True)
-    @attr(rnaseq_variantcall=True)
-    def test_2_rnaseq_variant(self):
-        """Run an RNA-seq analysis with STAR and generate gene-level counts.
-        """
-        self._install_test_files(self.data_dir)
-        with make_workdir() as workdir:
-            cl = ["bcbio_nextgen.py",
-                  get_post_process_yaml(self.data_dir, workdir),
-                  os.path.join(self.data_dir, os.pardir, "110907_ERP000591"),
-                  os.path.join(self.data_dir, "run_info-rnaseq-variantcall.yaml")]
             subprocess.check_call(cl)
 
     @attr(explant=True)
@@ -372,7 +358,9 @@ class AutomatedAnalysisTest(unittest.TestCase):
         """
         self._install_test_files(self.data_dir)
         with make_workdir() as workdir:
-            cl = ["bcbio_vm.py", "ipython",
+            cl = ["bcbio_vm.py",
+                  "--datadir=%s" % self.data_dir,
+                  "ipython",
                   "--systemconfig=%s" % get_post_process_yaml(self.data_dir, workdir),
                   "--fcdir=%s" % os.path.join(self.data_dir, os.pardir, "100326_FC6107FAAXX"),
                   os.path.join(self.data_dir, "run_info-bam.yaml"),

@@ -83,7 +83,7 @@ This requires the following additional system requirements to be in place:
   these are separate packages:
   ``ruby-libs`` and ``ruby-irb``)
 - Perl with development libraries (On Ubuntu or other deb systems:
-  ``perl, libperl-devel`` On RedHat or other rpm systems:
+  ``perl, libperl-dev`` On RedHat or other rpm systems:
   ``perl perl-devel perl-core``)
 - bzip2 (with development libraries)
 - curl and SSL (with development libraries; On Ubuntu: ``libssl-dev libcurl4-openssl-dev``, On
@@ -98,8 +98,6 @@ access to the executables, system libraries and Perl libraries update
 your `~/.bashrc` with::
 
     export PATH=/path_to_bcbio/bin:$PATH
-    export LD_LIBRARY_PATH=/path_to_bcbio/lib:$LD_LIBRARY_PATH
-    export PERL5LIB=/path_to_bcbio/lib/perl5:${PERL5LIB}
 
 This installation process is not easily re-locatable due to absolute
 filesystem pointers within the installation directory. We plan to move
@@ -111,7 +109,9 @@ installation.
 
 .. _private-install:
 
-## local/private bcbio installation
+local/private bcbio installation
+================================
+
 This is for if you have a previously installed version of bcbio-nextgen and you
 want to make changes to the code and test them without disrupting your
 installation.
@@ -121,7 +121,7 @@ Install `Miniconda`_::
   wget https://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh
   bash Miniconda-latest-Linux-x86_64.sh
 
-With MinoConda installed create a (private) conda environment to be used for
+With Miniconda installed create a (private) conda environment to be used for
 this bcbio installation::
 
   conda create -n bcbio pip distribute
@@ -130,9 +130,7 @@ The environment can then be switched on with `source activate bcbio` and off
 with `source deactivate`. Activate the environment and install bcbio within it::
 
   source activate bcbio
-  conda install -c bcbio pysam cyvcf2 pybedtools
-  conda install setuptools ipython jupyter scipy numpy matplotlib seaborn psutil scikit-learn lxml SQLAlchemy mock msgpack-python cython
-  pip install pythonpy
+  conda install -c bcbio bcbio-nextgen # This will install dependencies
   git clone https://github.com/chapmanb/bcbio-nextgen.git
   cd bcbio-nextgen
   python setup.py install
@@ -215,7 +213,7 @@ Extra software and data
 =======================
 
 We're not able to automatically install some useful tools due to licensing
-restrictions, so provide a mechanism to manually download and add these to
+restrictions, so we provide a mechanism to manually download and add these to
 bcbio-nextgen during an upgrade with the ``--toolplus`` command line. This also
 includes mechanisms to add in large annotation files not included by default.
 
@@ -320,7 +318,7 @@ Import errors with tracebacks containing Python libraries outside of the bcbio
 distribution (``/path/to/bcbio/anaconda``) are often due to other conflicting
 Python installations. bcbio tries to isolate itself as much as possible but
 external libraries can get included during installation due to the
-PYTHONHOME or PYTHONPATH environmental variation or local site libraries.
+PYTHONHOME or PYTHONPATH environmental variables or local site libraries.
 These commands will temporary unset those to get bcbio installed, after which it
 should ignore them automatically::
 
@@ -328,7 +326,7 @@ should ignore them automatically::
     $ unset PYTHONPATH
     $ export PYTHONNOUSERSITE=1
 
-Finally, having a .pydistutils.cfg file in your home directory can mess with
+Finally, having a ``.pydistutils.cfg`` file in your home directory can mess with
 where the libraries get installed. If you have this file in your
 home directory, temporarily renaming it to something else may fix
 your installation issue.

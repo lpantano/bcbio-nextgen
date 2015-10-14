@@ -16,7 +16,7 @@ from bcbio.distributed.transaction import file_transaction, tx_tmpdir
 from bcbio.pipeline import datadict as dd
 from bcbio.provenance import do
 from bcbio.structural import shared as sshared
-from bcbio.variation import vcfutils, vfilter
+from bcbio.variation import effects, vcfutils, vfilter
 
 # ## Lumpy main
 
@@ -77,6 +77,8 @@ def _filter_by_background(base_samples, back_samples, gt_vcfs, data):
                                 if _genotype_in_background(rec, back_recs):
                                     rec.add_filter(filtname)
                                 outp.write_record(rec)
+        if utils.file_exists(out_file + ".gz"):
+            out_file = out_file + ".gz"
         gt_vcfs[base_name] = vcfutils.bgzip_and_index(out_file, data["config"])
     return gt_vcfs
 
@@ -133,8 +135,10 @@ def run(items):
     for data in items:
         if "sv" not in data:
             data["sv"] = []
+        vcf_file = gt_vcfs[dd.get_sample_name(data)]
+        effects_vcf, _ = effects.add_to_vcf(vcf_file, data, "snpeff")
         data["sv"].append({"variantcaller": "lumpy",
-                           "vrn_file": gt_vcfs[dd.get_sample_name(data)],
+                           "vrn_file": effects_vcf or vcf_file,
                            "exclude_file": exclude_file})
         out.append(data)
     return out

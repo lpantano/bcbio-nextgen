@@ -98,9 +98,8 @@ def upgrade_bcbio(args):
                 upgrade_bcbio_data(args, REMOTES)
                 print("bcbio-nextgen data upgrade complete.")
     if args.isolate and args.tooldir:
-        print("Installation directory not added to current PATH")
-        print(" Add:\n  {t}/bin to PATH\n  {t}/lib to LD_LIBRARY_PATH\n"
-              "  {t}/lib/perl5 to PERL5LIB".format(t=args.tooldir))
+        print("Isolated tool installation not automatically added to environmental variables")
+        print(" Add:\n  {t}/bin to PATH".format(t=args.tooldir))
     save_install_defaults(args)
     args.datadir = _get_data_dir()
     _install_container_bcbio_system(args.datadir)
@@ -214,10 +213,9 @@ def _update_conda_packages():
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
             "sqlalchemy", "statsmodels", "toolz", "tornado", "seqcluster_lite"]
-    channels = ["-c", "bcbio"]
+    channels = ["-c", "bcbio", "-c", "bioconda"]
     conda_bin = _get_conda_bin()
     if conda_bin:
-        subprocess.check_call([conda_bin, "install", "--yes", "numpy"])
         subprocess.check_call([conda_bin, "install", "--yes"] + channels + pkgs)
         return os.path.dirname(os.path.dirname(conda_bin))
 
@@ -322,7 +320,7 @@ def _upgrade_snpeff_data(galaxy_dir, args, remotes):
                         subprocess.check_call(["unzip", dl_file])
                         os.remove(dl_file)
                     dl_dir = os.path.join(snpeff_base_dir, "data", snpeff_db)
-                    os.rename(dl_dir, snpeff_db_dir)
+                    shutil.move(dl_dir, snpeff_db_dir)
                     os.rmdir(os.path.join(snpeff_base_dir, "data"))
 
 def _is_old_database(db_dir, args):

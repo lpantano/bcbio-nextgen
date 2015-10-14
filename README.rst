@@ -2,13 +2,16 @@
    :alt: bcbio banner
    :align: center
 
-Validated, scalable, community developed variant calling and RNA-seq analysis.
-You write a high level configuration file specifying your inputs and analysis
-parameters.  This input drives a parallel run that handles distributed
-execution, idempotent processing restarts and safe transactional steps.
-bcbio-nextgen provides a shared community resource that handles the data processing
-component of sequencing analysis, providing researchers with more time to focus
-on the downstream biology.
+Validated, scalable, community developed variant calling, RNA-seq and small RNA
+analysis. You write a high level configuration file specifying your inputs and
+analysis parameters. This input drives a parallel run that handles distributed
+execution, idempotent processing restarts and safe transactional steps. bcbio
+provides a shared community resource that handles the data processing component
+of sequencing analysis, providing researchers with more time to focus on the
+downstream biology.
+
+.. image:: https://travis-ci.org/chapmanb/bcbio-nextgen.png
+    :target: https://travis-ci.org/chapmanb/bcbio-nextgen
 
 Features
 --------
@@ -35,16 +38,17 @@ Features
   details.
 
 - Multiple analysis algorithms: bcbio-nextgen provides configurable
-  `variant calling and RNA-seq pipelines`_.
+  `variant calling, RNA-seq and small RNA pipelines`_.
 
 .. _IPython parallel: http://ipython.org/ipython-doc/dev/index.html
 .. _parallel documentation: https://bcbio-nextgen.readthedocs.org/en/latest/contents/parallel.html
 .. _A single installer script: https://bcbio-nextgen.readthedocs.org/en/latest/contents/installation.html#automated
 .. _users page: https://bcbio-nextgen.readthedocs.org/en/latest/contents/introduction.html#users
 .. _developer documentation: https://bcbio-nextgen.readthedocs.org/en/latest/contents/code.html
-.. _variant calling and RNA-seq pipelines: https://bcbio-nextgen.readthedocs.org/en/latest/contents/pipelines.html
+.. _variant calling, RNA-seq and small RNA pipelines: https://bcbio-nextgen.readthedocs.org/en/latest/contents/pipelines.html
 .. _parallel analysis and scaling: http://bcb.io/2013/05/22/scaling-variant-detection-pipelines-for-whole-genome-sequencing-analysis/
 .. _Automated validation: http://bcb.io/2014/05/12/wgs-trio-variant-evaluation/
+
 
 Quick start
 -----------
@@ -79,11 +83,11 @@ Quick start
 Documentation
 -------------
 
-See the `full documentation at ReadTheDocs`_. We welcome enhancements
-or problem reports using `GitHub`_ and discussion on the
-`biovalidation mailing list`_.
+See the `full documentation`_ and `longer analysis-based articles
+<http://bcb.io>`_. We welcome enhancements or problem reports using `GitHub`_
+and discussion on the `biovalidation mailing list`_.
 
-.. _full documentation at ReadTheDocs: https://bcbio-nextgen.readthedocs.org
+.. _full documentation: https://bcbio-nextgen.readthedocs.org
 .. _GitHub: https://github.com/chapmanb/bcbio-nextgen/issues
 .. _biovalidation mailing list: https://groups.google.com/d/forum/biovalidation
 

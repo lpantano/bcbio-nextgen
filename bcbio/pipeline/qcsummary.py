@@ -37,12 +37,12 @@ from bcbio.pipeline import config_utils, run_info
 from bcbio.install import _get_data_dir
 from bcbio.provenance import do
 import bcbio.rnaseq.qc
-from bcbio.rnaseq.coverage import plot_gene_coverage
 import bcbio.pipeline.datadict as dd
 from bcbio.variation import bedutils
 from bcbio import broad
 from bcbio.variation import coverage_experimental as cov
 from bcbio.variation.coverage import decorate_problem_regions
+from bcbio.ngsalign.postalign import dedup_bam
 # ## High level functions to generate summary
 
 
@@ -113,9 +113,7 @@ def _run_qc_tools(bam_file, data):
     if "fastqc" not in tz.get_in(("config", "algorithm", "tools_off"), data, []):
         to_run.append(("fastqc", _run_fastqc))
     if data["analysis"].lower().startswith("rna-seq"):
-        # to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
-        # to_run.append(("coverage", _run_gene_coverage))
-        # to_run.append(("complexity", _run_complexity))
+        to_run.append(("bamtools", _run_bamtools_stats))
         to_run.append(("qualimap", _rnaseq_qualimap))
     elif data["analysis"].lower().startswith("chip-seq"):
         to_run.append(["bamtools", _run_bamtools_stats])
@@ -131,9 +129,6 @@ def _run_qc_tools(bam_file, data):
         cur_qc_dir = os.path.join(qc_dir, program_name)
         cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
         metrics.update(cur_metrics)
-    # if (ratio < 0.60 and data['config']["algorithm"].get("kraken", None) and
-        # (data["analysis"].lower().startswith("rna-seq") or
-        #  data["analysis"].lower().startswith("standard"))):
     if data['config']["algorithm"].get("kraken", None):
         ratio = bam.get_aligned_reads(bam_file, data)
         cur_metrics = _run_kraken(data, ratio)
@@ -624,23 +619,30 @@ def _parse_metrics(metrics):
             continue
     return out
 
-def _detect_duplicates(bam_file, out_dir, config):
+def _detect_duplicates(bam_file, out_dir, data):
     """
-    Detect duplicates metrics with Picard
+    count duplicate percentage
     """
-    out_file = os.path.join(out_dir, "dup_metrics")
+    out_file = os.path.join(out_dir, "dup_metrics.txt")
     if not utils.file_exists(out_file):
-        broad_runner = broad.runner_from_config(config)
-        (dup_align_bam, metrics_file) = broad_runner.run_fn("picard_mark_duplicates", bam_file, remove_dups=True)
-        shutil.move(metrics_file, out_file)
-    metrics = []
+        dup_align_bam = dedup_bam(bam_file, data)
+        num_cores = dd.get_num_cores(data)
+        with file_transaction(out_file) as tx_out_file:
+            sambamba = config_utils.get_program("sambamba", data, default="sambamba")
+            dup_count = ("{sambamba} view --nthreads {num_cores} --count "
+                         "-F 'duplicate and not unmapped' "
+                         "{bam_file} >> {tx_out_file}")
+            message = "Counting duplicates in {bam_file}.".format(bam_file=bam_file)
+            do.run(dup_count.format(**locals()), message)
+            tot_count = ("{sambamba} view --nthreads {num_cores} --count "
+                         "-F 'not unmapped' "
+                         "{bam_file} >> {tx_out_file}")
+            message = "Counting reads in {bam_file}.".format(bam_file=bam_file)
+            do.run(tot_count.format(**locals()), message)
     with open(out_file) as in_handle:
-        reader = csv.reader(in_handle, dialect="excel-tab")
-        for line in reader:
-            if line and not line[0].startswith("#"):
-                metrics.append(line)
-    metrics = dict(zip(metrics[0], metrics[1]))
-    return {"Duplication Rate of Mapped": metrics["PERCENT_DUPLICATION"]}
+        dupes = float(in_handle.next().strip())
+        total = float(in_handle.next().strip())
+    return {"Duplication Rate of Mapped": dupes / total}
 
 def _transform_browser_coor(rRNA_interval, rRNA_coor):
     """
@@ -731,7 +733,7 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
         cmd = _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end)
         do.run(cmd, "Qualimap for {}".format(data["name"][-1]))
     metrics = _parse_rnaseq_qualimap_metrics(report_file)
-    metrics.update(_detect_duplicates(bam_file, out_dir, config))
+    metrics.update(_detect_duplicates(bam_file, out_dir, data))
     metrics.update(_detect_rRNA(config, bam_file, gtf_file, ref_file, out_dir, single_end))
     metrics.update({"Fragment Length Mean": bam.estimate_fragment_size(bam_file)})
     metrics = _parse_metrics(metrics)
@@ -1053,6 +1055,8 @@ def coverage_report(data):
     """
     data = cov.coverage(data)
     data = cov.variants(data)
+    data = cov.priority_coverage(data)
+    data = cov.priority_total_coverage(data)
     problem_regions = dd.get_problem_region_dir(data)
     name = dd.get_sample_name(data)
     if "coverage" in data:
@@ -1073,17 +1077,19 @@ def _merge_metrics(yaml_data):
     dt_together = []
     with file_transaction(out_file) as out_tx:
         for s in project['samples']:
-            m = s['summary']['metrics']
-            for me in m:
-                if isinstance(m[me], list):
-                    m[me] = ":".join(m[me])
-            dt = pd.DataFrame(m, index=['1'])
-            # dt = pd.DataFrame.from_dict(m)
-            dt.columns = [k.replace(" ", "_").replace("(", "").replace(")", "") for k in dt.columns]
-            dt['sample'] = s['description']
-            dt_together.append(dt)
-        dt_together = utils.rbind(dt_together)
-        dt_together.to_csv(out_tx, index=False, sep="\t")
+            m = tz.get_in(['summary', 'metrics'], s)
+            if m:
+                for me in m:
+                    if isinstance(m[me], list):
+                        m[me] = ":".join(m[me])
+                dt = pd.DataFrame(m, index=['1'])
+                # dt = pd.DataFrame.from_dict(m)
+                dt.columns = [k.replace(" ", "_").replace("(", "").replace(")", "") for k in dt.columns]
+                dt['sample'] = s['description']
+                dt_together.append(dt)
+        if len(dt_together) > 0:
+            dt_together = utils.rbind(dt_together)
+            dt_together.to_csv(out_tx, index=False, sep="\t")
 
 def _merge_fastqc(data):
     """

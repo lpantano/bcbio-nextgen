@@ -74,6 +74,15 @@ def _get_caller(data):
                "precalled"]
     return [c for c in callers if c][0]
 
+def _get_caller_supplement(caller, data):
+    """Some callers like MuTect incorporate a second caller for indels.
+    """
+    if caller == "mutect":
+        icaller = tz.get_in(["config", "algorithm", "indelcaller"], data)
+        if icaller:
+            caller = "%s/%s" % (caller, icaller)
+    return caller
+
 def compare_to_rm(data):
     """Compare final variant calls against reference materials of known calls.
     """
@@ -107,7 +116,7 @@ def compare_to_rm(data):
 
 def _get_sample_and_caller(data):
     return [tz.get_in(["metadata", "validate_sample"], data) or dd.get_sample_name(data),
-            _get_caller(data)]
+            _get_caller_supplement(_get_caller(data), data)]
 
 def _rtg_add_summary_file(eval_files, base_dir, data):
     """Parse output TP FP and FN files to generate metrics for plotting.
@@ -150,8 +159,17 @@ def _run_rtg_eval(vrn_file, rm_file, rm_interval_file, base_dir, data):
                                                 "%s.sdf" % (os.path.splitext(ref_filebase)[0])))
         assert os.path.exists(rtg_ref), ("Did not find rtg indexed reference file for validation:\n%s\n"
                                          "Run bcbio_nextgen.py upgrade --data --aligners rtg" % rtg_ref)
-        cmd = ["rtg", "vcfeval", "-b", rm_file, "--bed-regions", interval_bed,
+        cmd = ["rtg", "vcfeval",
+               "-b", rm_file, "--bed-regions", interval_bed,
                "-c", vrn_file, "-t", rtg_ref, "-o", out_dir]
+        caller = _get_caller(data)
+        # flexible quality scores for building ROC curves, handle multiple cases
+        # MuTect has no quality scores
+        if caller == "mutect":
+            cmd +=  ["--vcf-score-field=BQ"]
+        # otherwise use quality score as a standarde
+        else:
+            cmd +=  ["--vcf-score-field=QUAL"]
         do.run(cmd, "Validate calls using rtg vcfeval", data)
     return {"tp": os.path.join(out_dir, "tp.vcf.gz"),
             "fp": os.path.join(out_dir, "fp.vcf.gz"),
@@ -164,7 +182,8 @@ def _get_merged_intervals(rm_interval_file, base_dir, data):
     if a_intervals:
         final_intervals = shared.remove_lcr_regions(a_intervals, [data])
         if rm_interval_file:
-            sample, caller = _get_sample_and_caller(data)
+            caller = _get_caller(data)
+            sample = dd.get_sample_name(data)
             combo_intervals = os.path.join(base_dir, "%s-%s-%s-wrm.bed" %
                                            (utils.splitext_plus(os.path.basename(final_intervals))[0],
                                             sample, caller))

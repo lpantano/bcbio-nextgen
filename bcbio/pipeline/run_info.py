@@ -139,10 +139,26 @@ def add_reference_resources(data):
     data["genome_resources"] = genome.get_resources(data["genome_build"], ref_loc, data)
     if effects.get_type(data) == "snpeff":
         data["reference"]["snpeff"] = effects.get_snpeff_files(data)
+    data = _fill_validation_targets(data)
     # Re-enable when we have ability to re-define gemini configuration directory
     if False:
         if population.do_db_build([data], check_gemini=False, need_bam=False):
             data["reference"]["gemini"] = population.get_gemini_files(data)
+    return data
+
+def _fill_validation_targets(data):
+    """Fill validation targets pointing to globally installed truth sets.
+    """
+    ref_file = dd.get_ref_file(data)
+    for vtarget in ["validate", "validate_regions"]:
+        val = tz.get_in(["config", "algorithm", vtarget], data)
+        if val and not os.path.exists(val):
+            installed_val = os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir, "validation", val))
+            if os.path.exists(installed_val):
+                data["config"]["algorithm"][vtarget] = installed_val
+            else:
+                raise ValueError("Configuration problem. Validation file not found for %s: %s" %
+                                 (vtarget, val))
     return data
 
 # ## Sample and BAM read group naming
@@ -193,9 +209,10 @@ def prep_rg_names(item, config, fc_name, fc_date):
     return {"rg": item["lane"],
             "sample": item["description"],
             "lane": lane_name,
-            "pl": item.get("algorithm", {}).get("platform",
-                                                config.get("algorithm", {}).get("platform", "illumina")).lower(),
-            "pu": lane_name}
+            "pl": (tz.get_in(["algorithm", "platform"], item)
+                   or tz.get_in(["algorithm", "platform"], item, "illumina")).lower(),
+            "lb": tz.get_in(["metadata", "library"], item),
+            "pu": tz.get_in(["metadata", "platform_unit"], item) or lane_name}
 
 # ## Configuration file validation
 
@@ -294,12 +311,12 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "nomap_split_targets", "ensemble", "background",
                       "disambiguate", "strandedness", "fusion_mode",
                       "min_read_length", "coverage_depth_min",
-                      "coverage_depth_max", "min_allele_fraction",
+                      "min_allele_fraction",
                       "remove_lcr", "joint_group_size",
                       "archive", "tools_off", "tools_on", "assemble_transcripts",
                       "mixup_check", "priority_regions", "expression_caller"] +
                      # back compatibility
-                      ["coverage_depth"])
+                      ["coverage_depth_max", "coverage_depth"])
 ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr",
                           "clinical_reporting", "transcriptome_align",
                           "fusion_mode", "assemble_transcripts", "trim_reads",
@@ -350,11 +367,10 @@ def _check_toplevel_misplaced(item):
 
 
 def _detect_fastq_format(in_file, MAX_RECORDS=1000):
-    ranges = {"sanger": (33, 73),
-              "solexa": (59, 104),
-              "illumina_1.3+": (64, 104),
-              "illumina_1.5+": (66, 104),
-              "illumina_1.8+": (35, 74)}
+    ranges = {"sanger": (33, 126),
+              "solexa": (59, 126),
+              "illumina_1.3+": (64, 126),
+              "illumina_1.5+": (66, 126)}
 
     gmin, gmax = 99, 0
     possible = set(ranges.keys())

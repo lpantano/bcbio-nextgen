@@ -354,6 +354,7 @@ def combine_variant_files(orig_files, out_file, ref_file, config,
                 params.extend(["--variant:{name}".format(name=name), ready_file])
                 priority_order.append(name)
             params.extend(["--rod_priority_list", ",".join(priority_order)])
+            params.extend(["--genotypemergeoption", "PRIORITIZE"])
             if quiet_out:
                 params.extend(["--suppressCommandLineHeader", "--setKey", "null"])
             variant_regions = config["algorithm"].get("variant_regions", None)
@@ -434,7 +435,8 @@ def bgzip_and_index(in_file, config, remove_orig=True, prep_cmd="", tabix_args=N
     if out_dir:
         remove_orig = False
         out_file = os.path.join(out_dir, os.path.basename(out_file))
-    if not utils.file_exists(out_file) or not os.path.lexists(out_file):
+    if (not utils.file_exists(out_file) or not os.path.lexists(out_file)
+          or (utils.file_exists(in_file) and not utils.file_uptodate(out_file, in_file))):
         assert not in_file == out_file, "Input file is bgzipped but not found: %s" % in_file
         assert os.path.exists(in_file), "Input file %s not found" % in_file
         if not utils.file_uptodate(out_file, in_file):

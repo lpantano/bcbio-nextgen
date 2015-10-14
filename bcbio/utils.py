@@ -268,6 +268,13 @@ def file_plus_index(fname):
     else:
         return [fname]
 
+def copy_plus(orig, new):
+    """Copy a fils, including biological index files.
+    """
+    for ext in ["", ".idx", ".gbi", ".tbi", ".bai"]:
+        if os.path.exists(orig + ext) and (not os.path.lexists(new + ext) or not os.path.exists(new + ext)):
+            shutil.copyfile(orig + ext, new + ext)
+
 def symlink_plus(orig, new):
     """Create relative symlinks and handle associated biological index files.
     """
@@ -362,11 +369,16 @@ def robust_partition_all(n, iterable):
                 raise StopIteration
         yield x
 
-def partition(pred, iterable):
+def partition(pred, iterable, tolist=False):
     'Use a predicate to partition entries into false entries and true entries'
     # partition(is_odd, range(10)) --> 0 2 4 6 8   and  1 3 5 7 9
     t1, t2 = itertools.tee(iterable)
-    return itertools.ifilterfalse(pred, t1), itertools.ifilter(pred, t2)
+    ifalse = itertools.ifilterfalse(pred, t1)
+    itrue = itertools.ifilter(pred, t2)
+    if tolist:
+        return list(ifalse), list(itrue)
+    else:
+        return ifalse, itrue
 
 # ## Dealing with configuration files
 

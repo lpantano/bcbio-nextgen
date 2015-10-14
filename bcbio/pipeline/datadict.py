@@ -60,6 +60,8 @@ LOOKUPS = {
                        "default": "standard"},
     "adapters": {"keys": ['config', 'algorithm', 'adapters'],
                  "default": []},
+    "custom_trim": {"keys": ['config', 'algorithm', 'custom_trim'],
+                 "default": []},
     "species": {"keys": ['config', 'algorithm', 'species'],
                  "default": None},
     "variation_resources": {"keys": ["genome_resources", "variation"], "default": {}},
@@ -86,14 +88,15 @@ LOOKUPS = {
     "variant_regions": {"keys": ["config", "algorithm", "variant_regions"]},
     "callable_regions": {"keys": ["regions", "callable"]},
     "offtarget_stats": {"keys": ["regions", "offtarget_stats"]},
+    "sailfish": {"keys": ["sailfish"]},
+    "sailfish_dir": {"keys": ["sailfish_dir"]},
+    "sailfish_combined": {"keys": ["sailfish_combined"]},
     "sample_callable": {"keys": ["regions", "sample_callable"]},
     "coverage_interval": {"keys": ["config", "algorithm", "coverage_interval"]},
     "coverage": {"keys": ["config", "algorithm", "coverage"]},
     "report": {"keys": ["config", "algorithm", "report"]},
     "coverage_depth_min": {"keys": ["config", "algorithm", "coverage_depth_min"],
                            "default": 4},
-    "coverage_depth_max": {"keys": ["config", "algorithm", "coverage_depth_max"],
-                           "default": 10000},
     "joint_group_size": {"keys": ["config", "algorithm", "joint_group_size"],
                          "default": 200},
     "coverage": {"keys": ["config", "algorithm", "coverage"]},
@@ -194,3 +197,12 @@ def sample_data_iterator(samples):
     """
     for sample in samples:
         yield sample[0]
+
+def get_in_samples(samples, fn):
+    """
+    for a list of samples, return the value of a global option
+    """
+    for sample in samples:
+        if fn(sample[0], None):
+            return fn(sample[0])
+    return None

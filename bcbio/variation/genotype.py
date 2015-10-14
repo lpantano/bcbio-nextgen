@@ -6,7 +6,7 @@ import copy
 
 import toolz as tz
 
-from bcbio import utils
+from bcbio import bam, utils
 from bcbio.distributed.split import grouped_parallel_split_combine
 from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import region
@@ -168,7 +168,7 @@ def parallel_variantcall_region(samples, run_parallel):
     return extras + samples
 
 def _handle_precalled(data):
-    """Symlink in external pre-called variants fed into analysis.
+    """Copy in external pre-called variants fed into analysis.
     """
     if data.get("vrn_file"):
         vrn_file = data["vrn_file"]
@@ -179,7 +179,7 @@ def _handle_precalled(data):
         ext = utils.splitext_plus(vrn_file)[-1]
         orig_file = os.path.abspath(vrn_file)
         our_vrn_file = os.path.join(precalled_dir, "%s-precalled%s" % (dd.get_sample_name(data), ext))
-        utils.symlink_plus(orig_file, our_vrn_file)
+        utils.copy_plus(orig_file, our_vrn_file)
         data["vrn_file"] = our_vrn_file
     return data
 
@@ -247,6 +247,8 @@ def variantcall_sample(data, region=None, align_bams=None, out_file=None):
         call_file = "%s-raw%s" % utils.splitext_plus(out_file)
         assoc_files = tz.get_in(("genome_resources", "variation"), data, {})
         if not assoc_files: assoc_files = {}
+        for bam_file in align_bams:
+            bam.index(bam_file, data["config"], check_timestamp=False)
         call_file = caller_fn(align_bams, items, sam_ref, assoc_files, region, call_file)
         if data["config"]["algorithm"].get("phasing", False) == "gatk":
             call_file = phasing.read_backed_phasing(call_file, align_bams, sam_ref, region, config)

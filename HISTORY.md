@@ -1,4 +1,31 @@
-## 0.9.3 (in progress)
+## 0.9.4 (14 October 2015)
+
+- Ensure genome data sort order is identical to BED files when annotating
+  structural variant calls. Thanks To Miika Ahdesmaki.
+- Improve low frequency calling for VarDict using vaidation against DREAM
+  synthetic dataset 4.
+- Install truth sets for germline and cancer calling automatically as part of
+  bcbio and make it easy to include them in the configuration files for
+  validation.
+- Avoid need to set LD_LIBRARY_PATH and PERL5LIB on installations.
+- Update Scalpel to latest version (0.5.1) and improve sensitivity for low
+  frequency indels: http://imgur.com/a/7Dzd3
+- Drop `coverage_depth_max` for downsampling, which no longer works in GATK 3.4.
+  The option wasn't supported by other callers so was more confusing than useful.
+- Fix missing BAM index when running with `align: false`. Thanks to Stephan
+  Pabinger and Severine Catreux.
+- Annotate structural variant files with snpEff. Initial steps towards
+  summarized structural variant reporting.
+- Add ability to specify platform unit (PU) and library (LB) in BAM header.
+  Thanks to Brad Wubbenhorst.
+- Update gatk-framework to 3.4-46 to avoid errors dealing with new gVCF output.
+- Set java.io.tmpdir to avoid filling up global temporary space with snpEff.
+  Thanks to Oliver Hofmann.
+- Speed up transcriptome-only processing. Thanks to Sven-Eric Schelhorn.
+- Add bamtools output to RNA-seq quality metrics. Thanks to Sven-Eric Schelhorn.
+- Expand input quality format detection to detect full range of possible Sanger values.
+
+## 0.9.3 (27 September 2015)
 
 - Fix bug when using tumors with multiple normals and no CNV calling. Additional
   tumor sample would get lost due to lack of early (CNV-based) calling. Thanks
@@ -14,6 +41,9 @@
   for validation instead of bcbio.variation. Improves speed and resolution of
   closely spaced variants. The old funtionality is still available with
   `validate_method: bcbio.variation`.
+- Correctly apply BQSR when using recalibration with PrintReads by using GATK
+  full instead of the open source GATK framework which silently ignores BQSR
+  option. Thanks to Severine Catreux.
 - Require larger blocks (250bp, moved from 100bp) to find regions for splitting analysis
   to avoid too tight splitting around small homozygous deletions.
 - Adjust mapping quality (MQ) filter for GATK SNP hard filters to improve sensitivity
