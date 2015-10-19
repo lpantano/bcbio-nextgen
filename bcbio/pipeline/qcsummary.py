@@ -432,6 +432,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
         bam_file = ds_bam if ds_bam else bam_file
         frmt = "bam" if bam_file.endswith("bam") else "fastq"
         fastqc_name = utils.splitext_plus(os.path.basename(bam_file))[0]
+        fastqc_clean_name =  dd.get_sample_name(data)
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
             with utils.chdir(tx_tmp_dir):
@@ -445,7 +446,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
                     shutil.move(os.path.join(tx_fastqc_out, "fastqc_data.txt"), fastqc_out)
                     shutil.move(tx_combo_file, sentry_file)
                     if os.path.exists("%s.zip" % tx_fastqc_out):
-                        shutil.move("%s.zip" % tx_fastqc_out, fastqc_out)
+                        shutil.move("%s.zip" % tx_fastqc_out, os.path.join(fastqc_out, "%s.zip" % fastqc_clean_name))
                 elif not os.path.exists(sentry_file):
                     if os.path.exists(fastqc_out):
                         shutil.rmtree(fastqc_out)
@@ -1078,8 +1079,11 @@ def _get_coverage_per_region(name):
     """
     fn = os.path.join("coverage", name + "_coverage.bed")
     if utils.file_exists(fn):
-        dt = pd.read_csv(fn, sep="\t", index_col=False)
-        return "%.3f" % (sum(map(float, dt['meanCoverage'])) / len(dt['meanCoverage']))
+        try:
+            dt = pd.read_csv(fn, sep="\t", index_col=False)
+            return "%.3f" % (sum(map(float, dt['meanCoverage'])) / len(dt['meanCoverage']))
+        except TypeError:
+            logger.debug("%s has no lines in coverage.bed" % name)
     return "NA"
 
 def _merge_metrics(samples):
@@ -1109,7 +1113,8 @@ def _merge_metrics(samples):
             dt_together.to_csv(out_tx, index=False, sep="\t")
 
     for i, s in enumerate(samples):
-        samples[i][0]['summary']['metrics']['avg_coverage_per_region'] = cov[s[0]['description']]
+        if s[0]['description'] in cov:
+            samples[i][0]['summary']['metrics']['avg_coverage_per_region'] = cov[s[0]['description']]
     return samples
 
 def _merge_fastqc(data):
