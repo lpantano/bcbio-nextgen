@@ -85,7 +85,7 @@ def run_vardict(align_bams, items, ref_file, assoc_files, region=None,
 def _get_jvm_opts(data, out_file):
     """Retrieve JVM options when running the Java version of VarDict.
     """
-    if not dd.get_variantcaller(data).endswith("-perl"):
+    if get_vardict_command(data) == "vardict-java":
         resources = config_utils.get_resources("vardict", data["config"])
         jvm_opts = resources.get("jvm_opts", ["-Xms750m", "-Xmx4g"])
         jvm_opts += broad.get_default_jvm_opts(os.path.dirname(out_file))
@@ -109,8 +109,7 @@ def _run_vardict_caller(align_bams, items, ref_file, assoc_files,
             for bamfile, item in itertools.izip(align_bams, items):
                 # prepare commands
                 sample = dd.get_sample_name(item)
-                vardict = dd.get_variantcaller(items[0])
-                vardict = "vardict-java" if not vardict.endswith("-perl") else "vardict"
+                vardict = get_vardict_command(items[0])
                 strandbias = "teststrandbias.R"
                 var2vcf = "var2vcf_valid.pl"
                 opts = (" ".join(_vardict_options_from_config(items, config, out_file, target))
@@ -124,7 +123,8 @@ def _run_vardict_caller(align_bams, items, ref_file, assoc_files,
                 fix_ambig = vcfutils.fix_ambiguous_cl()
                 remove_dup = vcfutils.remove_dup_cl()
                 jvm_opts = _get_jvm_opts(items[0], tx_out_file)
-                cmd = ("{jvm_opts}{vardict} -G {ref_file} -f {freq} "
+                r_setup = "unset R_HOME && export PATH=%s:$PATH && " % os.path.dirname(utils.Rscript_cmd())
+                cmd = ("{r_setup}{jvm_opts}{vardict} -G {ref_file} -f {freq} "
                         "-N {sample} -b {bamfile} {opts} "
                         "| {strandbias}"
                         "| {var2vcf} -N {sample} -E -f {freq} {var2vcf_opts} "
@@ -245,8 +245,7 @@ def _run_vardict_paired(align_bams, items, ref_file, assoc_files,
                                                    assoc_files, region, out_file)
                     return ann_file
                 vcffilter = config_utils.get_program("vcffilter", config)
-                vardict = dd.get_variantcaller(items[0])
-                vardict = "vardict-java" if not vardict.endswith("-perl") else "vardict"
+                vardict = get_vardict_command(items[0])
                 vcfstreamsort = config_utils.get_program("vcfstreamsort", config)
                 strandbias = "testsomatic.R"
                 var2vcf = "var2vcf_paired.pl"
@@ -262,25 +261,44 @@ def _run_vardict_paired(align_bams, items, ref_file, assoc_files,
                 if any("vardict_somatic_filter" in tz.get_in(("config", "algorithm", "tools_off"), data, [])
                        for data in items):
                     somatic_filter = ""
+                    freq_filter = ""
                 else:
-                    somatic_filter = ("| %s -x 'bcbio.variation.freebayes.call_somatic(x)'" %
+                    var2vcf_opts += " -M "  # this makes VarDict soft filter non-differential variants
+                    somatic_filter = ("| sed 's/\\\\.*Somatic\\\\/Somatic/' "
+                                      "| sed 's/REJECT,Description=\".*\">/REJECT,Description=\"Not Somatic via VarDict\">/' "
+                                      "| %s -x 'bcbio.variation.freebayes.call_somatic(x)'" %
                                       os.path.join(os.path.dirname(sys.executable), "py"))
-                freq_filter = (" %s -x 'bcbio.variation.vardict.depth_freq_filter(x, %s, \"%s\")'" %
-                               (os.path.join(os.path.dirname(sys.executable), "py"),
-                                0, dd.get_aligner(paired.tumor_data)))
+                    freq_filter = ("| bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ \".*Somatic\"' 2> /dev/null "
+                                   "| %s -x 'bcbio.variation.vardict.depth_freq_filter(x, %s, \"%s\")'" %
+                                   (os.path.join(os.path.dirname(sys.executable), "py"),
+                                     0, dd.get_aligner(paired.tumor_data)))
                 jvm_opts = _get_jvm_opts(items[0], tx_out_file)
-                cmd = ("{jvm_opts}{vardict} -G {ref_file} -f {freq} "
+                r_setup = "unset R_HOME && export PATH=%s:$PATH && " % os.path.dirname(utils.Rscript_cmd())
+                cmd = ("{r_setup}{jvm_opts}{vardict} -G {ref_file} -f {freq} "
                        "-N {paired.tumor_name} -b \"{paired.tumor_bam}|{paired.normal_bam}\" {opts} "
                        "| {strandbias} "
-                       "| {var2vcf} -M -P 0.9 -m 4.25 -f {freq} {var2vcf_opts} "
+                       "| {var2vcf} -P 0.9 -m 4.25 -f {freq} {var2vcf_opts} "
                        "-N \"{paired.tumor_name}|{paired.normal_name}\" "
-                       "| bcftools filter -m '+' -s 'REJECT' -e 'STATUS !~ \".*Somatic\"' 2> /dev/null "
-                       "| {freq_filter} "
-                       "| sed 's/\\\\.*Somatic\\\\/Somatic/' "
-                       "| sed 's/REJECT,Description=\".*\">/REJECT,Description=\"Not Somatic via VarDict\">/' "
+                       "{freq_filter} "
                        "{somatic_filter} | {fix_ambig} | {remove_dup} | {vcfstreamsort} "
                        "{compress_cmd} > {tx_out_file}")
                 do.run(cmd.format(**locals()), "Genotyping with VarDict: Inference", {})
     out_file = (annotation.add_dbsnp(out_file, assoc_files["dbsnp"], config)
                 if assoc_files.get("dbsnp") else out_file)
     return out_file
+
+def get_vardict_command(data):
+    """
+    convert variantcaller specification to proper vardict command, handling
+    string or list specification
+    """
+    vcaller = dd.get_variantcaller(data)
+    if isinstance(vcaller, list):
+        vardict = [x for x in vcaller if "vardict" in x]
+        if not vardict:
+            return None
+        vardict = vardict[0]
+    else:
+        vardict = vcaller
+    vardict = "vardict-java" if not vardict.endswith("-perl") else "vardict"
+    return vardict

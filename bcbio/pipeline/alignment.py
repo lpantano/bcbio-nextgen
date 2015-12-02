@@ -9,8 +9,8 @@ import toolz as tz
 
 from bcbio import bam, utils
 from bcbio.bam import cram
-from bcbio.ngsalign import (bowtie, bwa, tophat, bowtie2,
-                            novoalign, snap, star)
+from bcbio.ngsalign import (bowtie, bwa, tophat, bowtie2, novoalign, snap, star,
+                            hisat2)
 
 # Define a next-generation sequencing tool to plugin:
 # align_fn -- runs an aligner and generates SAM output
@@ -40,7 +40,8 @@ TOOLS = {
     "snap": NgsTool(snap.align, snap.align_bam, snap.galaxy_location_file, snap.remap_index_fn),
     "star": NgsTool(star.align, None, None, star.remap_index_fn),
     "tophat2": NgsTool(tophat.align, None,
-                       bowtie2.galaxy_location_file, bowtie2.remap_index_fn)}
+                       bowtie2.galaxy_location_file, bowtie2.remap_index_fn),
+    "hisat2": NgsTool(hisat2.align, None, None, hisat2.remap_index_fn)}
 
 metadata = {"support_bam": [k for k, v in TOOLS.iteritems() if v.bam_align_fn is not None]}
 
@@ -53,6 +54,9 @@ def align_to_sort_bam(fastq1, fastq2, aligner, data):
         align_dir_parts.append(data["disambiguate"]["genome_build"])
     align_dir = utils.safe_makedir(apply(os.path.join, align_dir_parts))
     aligner_indexes = os.path.commonprefix(tz.get_in(("reference", aligner, "indexes"), data))
+    if not aligner_indexes:
+        raise ValueError("Did not find reference indices for aligner %s in genome %s" %
+                         (aligner, data["genome_build"]))
     if aligner_indexes.endswith("."):
         aligner_indexes = aligner_indexes[:-1]
     ref_file = tz.get_in(("reference", "fasta", "base"), data)

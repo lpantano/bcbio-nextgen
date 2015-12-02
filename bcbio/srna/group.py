@@ -8,6 +8,7 @@ from collections import namedtuple
 try:
     from seqcluster import prepare_data as prepare
     from seqcluster import templates as template_seqcluster
+    from seqcluster.seqbuster import _create_counts, _read_miraligner, _tab_output
 except ImportError:
     pass
 
@@ -17,7 +18,7 @@ from bcbio.distributed.transaction import file_transaction
 from bcbio.log import logger
 from bcbio.pipeline import datadict as dd
 from bcbio.pipeline.sample import process_alignment
-
+from bcbio.srna import mirdeep
 
 def run_prepare(*data):
     """
@@ -74,6 +75,10 @@ def run_cluster(*data):
     report_file = _report(data[0][0], dd.get_ref_file(data[0][0]))
     for sample in data:
         sample[0]["seqcluster"] = out_dir
+    out_mirna, out_isomir = _make_isomir_counts(data)
+    data[0][0]["mirna_counts"] = out_mirna
+    data[0][0]["isomir_counts"] = out_isomir
+    mirdeep.run(data)
     return data
 
 def _cluster(bam_file, prepare_dir, out_dir, reference, annotation_file=None):
@@ -154,8 +159,29 @@ def _modify_report(summary_path, summary_fn):
     content = open(template).read()
     out_content = string.Template(content).safe_substitute({'path_abs': summary_path,
                                                             'path_summary': os.path.join(summary_path, summary_fn)})
-    out_file = os.path.join(os.path.dirname(summary_fn), "ready_report.rmd")
+    out_file = os.path.join(os.path.dirname(summary_fn), "srna_report.rmd")
     with open(out_file, 'w') as out_handle:
         print >>out_handle, out_content
 
     return out_file
+
+def _make_isomir_counts(data):
+    """
+    Parse miraligner files to create count matrix.
+    """
+    work_dir = dd.get_work_dir(data[0][0])
+    out_dir = os.path.join(work_dir, "mirbase")
+    out_dts = []
+    for sample in data:
+        miraligner_fn = sample[0]["seqbuster"]
+        reads = _read_miraligner(miraligner_fn)
+        if reads:
+            out_file, dt = _tab_output(reads, miraligner_fn + ".back", dd.get_sample_name(sample[0]))
+            out_dts.append(dt)
+        else:
+            logger.log("WARNING::%s has NOT miRNA annotated. Check if fasta files is small or species value." % dd.get_sample_name(sample[0]))
+    if out_dts:
+        out_files = _create_counts(out_dts, out_dir)
+    else:
+        logger.log("WARNING::any samples have miRNA annotated. Check if fasta files is small or species value.")
+    return out_files

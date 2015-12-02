@@ -88,7 +88,7 @@ def coverage(data):
         if not file_exists(parse_file):
             with file_transaction(parse_file) as out_tx:
                 cmd = ("sambamba depth region -F \"not unmapped\" -t {cores} -C 200 -T 1 -T 5 -T 10 -T 20 -T 40 -T 50 -T 60 -T 70 -T 80 -T 100 -L {bed_file}  {in_bam} | sed 's/# chrom/chrom/' > {parse_file}")
-                do.run(cmd.format(**locals()), "Run coverage for {sample}")
+                do.run(cmd.format(**locals()), "Run coverage for {}".format(sample))
         _calculate_percentiles(parse_file, sample)
         data['coverage'] = os.path.abspath(parse_file)
         return data
@@ -130,7 +130,7 @@ def variants(data):
                 with file_transaction(parse_file) as out_tx:
                     with open(out_tx, 'w') as out_handle:
                         print >>out_handle, "CG\tdepth\tsample"
-                    cmd = ("bcftools query -f '[%GC][\\t%DP][\\t%SAMPLE]\\n' -R "
+                    cmd = ("bcftools query -s {sample} -f '[%GC][\\t%DP][\\t%SAMPLE]\\n' -R "
                             "{bed_file} {cg_file} >> {out_tx}")
                     do.run(cmd.format(**locals()),
                             "Calculating GC content and depth for %s" % in_vcf)

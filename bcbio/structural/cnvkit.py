@@ -20,7 +20,7 @@ from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import config_utils
 from bcbio.variation import bedutils, effects, vcfutils
 from bcbio.provenance import do
-from bcbio.structural import annotate, shared, regions, plot
+from bcbio.structural import annotate, shared, plot
 
 def run(items, background=None):
     """Detect copy number variations from batched set of samples using CNVkit.
@@ -50,17 +50,18 @@ def _associate_cnvkit_out(ckouts, items):
     for ckout, data in zip(ckouts, items):
         ckout = copy.deepcopy(ckout)
         ckout["variantcaller"] = "cnvkit"
-        ckout = _add_seg_to_output(ckout, data)
-        ckout = _add_gainloss_to_output(ckout, data)
-        ckout = _add_segmetrics_to_output(ckout, data)
-        ckout = _add_variantcalls_to_output(ckout, data)
-        # ckout = _add_coverage_bedgraph_to_output(ckout, data)
-        ckout = _add_cnr_bedgraph_and_bed_to_output(ckout, data)
-        if "svplots" in dd.get_tools_on(data):
-            ckout = _add_plots_to_output(ckout, data)
-        if "sv" not in data:
-            data["sv"] = []
-        data["sv"].append(ckout)
+        if utils.file_exists(ckout["cns"]):
+            ckout = _add_seg_to_output(ckout, data)
+            ckout = _add_gainloss_to_output(ckout, data)
+            ckout = _add_segmetrics_to_output(ckout, data)
+            ckout = _add_variantcalls_to_output(ckout, data)
+            # ckout = _add_coverage_bedgraph_to_output(ckout, data)
+            ckout = _add_cnr_bedgraph_and_bed_to_output(ckout, data)
+            if "svplots" in dd.get_tools_on(data):
+                ckout = _add_plots_to_output(ckout, data)
+            if "sv" not in data:
+                data["sv"] = []
+            data["sv"].append(ckout)
         out.append(data)
     return out
 
@@ -296,18 +297,7 @@ def _get_target_access_files(cov_interval, data, work_dir):
     pick targets, anti-targets and access files based on analysis type
     http://cnvkit.readthedocs.org/en/latest/nonhybrid.html
     """
-    base_regions = regions.get_sv_bed(data)
-    # if we don't have a configured BED or regions to use for SV caling
-    if not base_regions:
-        # For genome calls, subset to regions within 10kb of genes
-        if cov_interval == "genome":
-            base_regions = regions.get_sv_bed(data, "transcripts1e4", work_dir)
-            if base_regions:
-                base_regions = shared.remove_exclude_regions(base_regions, base_regions, [data])
-        # Finally, default to the defined variant regions
-        if not base_regions:
-            base_regions = dd.get_variant_regions(data)
-
+    base_regions = shared.get_base_cnv_regions(data, work_dir)
     target_bed = bedutils.merge_overlaps(base_regions, data, out_dir=work_dir)
     if cov_interval == "amplicon":
         return target_bed, target_bed
@@ -543,7 +533,7 @@ def _create_access_file(ref_file, out_dir, data):
     out_file = os.path.join(out_dir, "%s-access.bed" % os.path.splitext(os.path.basename(ref_file))[0])
     if not utils.file_exists(out_file):
         with file_transaction(data, out_file) as tx_out_file:
-            cmd = [os.path.join(os.path.dirname(sys.executable), "genome2access.py"),
+            cmd = [_get_cmd(), "access",
                    ref_file, "-s", "10000", "-o", tx_out_file]
             do.run(cmd, "Create CNVkit access file")
     return out_file

@@ -33,10 +33,12 @@ REMOTES = {
     "genome_resources": "https://raw.github.com/chapmanb/bcbio-nextgen/master/config/genomes/%s-resources.yaml",
     "snpeff_dl_url": ("http://downloads.sourceforge.net/project/snpeff/databases/v{snpeff_ver}/"
                       "snpEff_v{snpeff_ver}_{genome}.zip")}
-SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5",
-                     "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
-                     "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"]
-SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "rtg", "snap", "star", "ucsc", "seq"]
+SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9",
+                     "rn6", "rn5", "canFam3", "dm3", "galGal4", "phix",
+                     "pseudomonas_aeruginosa_ucbpp_pa14", "sacCer3", "TAIR10",
+                     "WBcel235", "xenTro3", "Zv9", "GRCz10"]
+SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "rtg", "snap",
+                     "star", "ucsc", "seq", "hisat2"]
 DEFAULT_INDEXES = ["rtg"]
 
 Tool = collections.namedtuple("Tool", ["name", "fname"])
@@ -182,7 +184,7 @@ def _install_container_bcbio_system(datadir):
     return expose_file
 
 def _get_conda_bin():
-    conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
+    conda_bin = os.path.join(os.path.dirname(os.path.realpath(sys.executable)), "conda")
     if os.path.exists(conda_bin):
         return conda_bin
 
@@ -207,7 +209,7 @@ def _default_deploy_args(args):
 def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
-    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "cyvcf2", "gffutils",
             "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
@@ -220,7 +222,7 @@ def _update_conda_packages():
         return os.path.dirname(os.path.dirname(conda_bin))
 
 def _get_data_dir():
-    base_dir = os.path.realpath(os.path.dirname(os.path.dirname(sys.executable)))
+    base_dir = os.path.realpath(os.path.dirname(os.path.dirname(os.path.realpath(sys.executable))))
     if "anaconda" not in os.path.basename(base_dir) and "virtualenv" not in os.path.basename(base_dir):
         raise ValueError("Cannot update data for bcbio-nextgen not installed by installer.\n"
                          "bcbio-nextgen needs to be installed inside an anaconda environment \n"
@@ -583,6 +585,9 @@ def add_install_defaults(args):
                              "After a successful upgrade, the '--tools' parameter will "
                              "work for future upgrades.")
     for attr in ["genomes", "aligners", "toolplus"]:
+        # don't upgrade default genomes if a genome was specified
+        if attr == "genomes" and len(args.genomes) > 0:
+            continue
         for x in default_args.get(attr, []):
             x = Tool(x, None) if attr == "toolplus" else str(x)
             new_val = getattr(args, attr)

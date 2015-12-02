@@ -6,6 +6,7 @@ next gen LIMS system or an on-file YAML configuration.
 import collections
 from contextlib import closing
 import copy
+import glob
 import itertools
 import os
 import string
@@ -27,7 +28,7 @@ from bcbio.bam.fastq import open_fastq
 ALGORITHM_NOPATH_KEYS = ["variantcaller", "realign", "recalibrate",
                          "phasing", "svcaller", "hetcaller", "jointcaller", "tools_off", "mixup_check"]
 
-def organize(dirs, config, run_info_yaml, sample_names=None):
+def organize(dirs, config, run_info_yaml, sample_names=None, add_provenance=True):
     """Organize run information from a passed YAML file or the Galaxy API.
 
     Creates the high level structure used for subsequent processing.
@@ -63,19 +64,27 @@ def organize(dirs, config, run_info_yaml, sample_names=None):
                 tmp_dir = genome.abs_file_paths(tmp_dir)
             item["config"]["resources"]["tmp"]["dir"] = tmp_dir
         out.append(item)
-    out = _add_provenance(out, dirs, config)
+    out = _add_provenance(out, dirs, config, add_provenance)
     return out
 
-def _add_provenance(items, dirs, config):
-    p = programs.write_versions(dirs, config=config)
-    versioncheck.testall(items)
-    p_db = diagnostics.initialize(dirs)
+def normalize_world(data):
+    """Normalize a data object, useful after serializetion via CWL.
+    """
+    data = _normalize_files(data)
+    return data
+
+def _add_provenance(items, dirs, config, add_provenance=True):
+    if add_provenance:
+        p = programs.write_versions(dirs, config=config)
+        versioncheck.testall(items)
+        p_db = diagnostics.initialize(dirs)
     out = []
     for item in items:
-        entity_id = diagnostics.store_entity(item)
-        item["config"]["resources"]["program_versions"] = p
-        item["provenance"] = {"programs": p, "entity": entity_id,
-                              "db": p_db}
+        if add_provenance:
+            entity_id = diagnostics.store_entity(item)
+            item["config"]["resources"]["program_versions"] = p
+            item["provenance"] = {"programs": p, "entity": entity_id,
+                                "db": p_db}
         out.append([item])
     return out
 
@@ -140,6 +149,7 @@ def add_reference_resources(data):
     if effects.get_type(data) == "snpeff":
         data["reference"]["snpeff"] = effects.get_snpeff_files(data)
     data = _fill_validation_targets(data)
+    data = _fill_prioritization_targets(data)
     # Re-enable when we have ability to re-define gemini configuration directory
     if False:
         if population.do_db_build([data], check_gemini=False, need_bam=False):
@@ -150,15 +160,44 @@ def _fill_validation_targets(data):
     """Fill validation targets pointing to globally installed truth sets.
     """
     ref_file = dd.get_ref_file(data)
-    for vtarget in ["validate", "validate_regions"]:
-        val = tz.get_in(["config", "algorithm", vtarget], data)
+    sv_targets = zip(itertools.repeat("svvalidate"),
+                     tz.get_in(["config", "algorithm", "svvalidate"], data, {}).keys())
+    for vtarget in [list(xs) for xs in [["validate"], ["validate_regions"]] + sv_targets]:
+        val = tz.get_in(["config", "algorithm"] + vtarget, data)
         if val and not os.path.exists(val):
             installed_val = os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir, "validation", val))
             if os.path.exists(installed_val):
-                data["config"]["algorithm"][vtarget] = installed_val
+                data = tz.update_in(data, ["config", "algorithm"] + vtarget, lambda x: installed_val)
             else:
                 raise ValueError("Configuration problem. Validation file not found for %s: %s" %
                                  (vtarget, val))
+    return data
+
+def _fill_prioritization_targets(data):
+    """Fill in globally installed files for prioritization.
+    """
+    ref_file = dd.get_ref_file(data)
+    for target in [["svprioritize"]]:
+        val = tz.get_in(["config", "algorithm"] + target, data)
+        if val and not os.path.exists(val):
+            installed_vals = glob.glob(os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir,
+                                                                     "coverage", "prioritize", val + "*.bed.gz")))
+            if len(installed_vals) == 0:
+                raise ValueError("Configuration problem. Prioritization file not found for %s: %s" %
+                                 (target, val))
+            elif len(installed_vals) == 1:
+                installed_val = installed_vals[0]
+            else:
+                # check for partial matches
+                installed_val = None
+                for v in installed_vals:
+                    if v.endswith(val + ".bed.gz"):
+                        installed_val = v
+                        break
+                # handle date-stamped inputs
+                if not installed_val:
+                    installed_val = sorted(installed_vals, reverse=True)[0]
+            data = tz.update_in(data, ["config", "algorithm"] + target, lambda x: installed_val)
     return data
 
 # ## Sample and BAM read group naming
@@ -303,24 +342,28 @@ ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
                       "quality_format", "write_summary", "merge_bamprep",
                       "coverage", "coverage_interval", "ploidy", "indelcaller",
                       "variantcaller", "jointcaller", "variant_regions",
-                      "effects", "mark_duplicates", "svcaller", "svvalidate",
+                      "effects", "mark_duplicates",
+                      "svcaller", "svvalidate", "svprioritize",
+                      "hlacaller", "hlavalidate",
                       "sv_regions", "hetcaller", "problem_region_dir",
                       "recalibrate", "realign", "phasing", "validate",
                       "validate_regions", "validate_genome_build", "validate_method",
                       "clinical_reporting", "nomap_split_size",
                       "nomap_split_targets", "ensemble", "background",
                       "disambiguate", "strandedness", "fusion_mode",
-                      "min_read_length", "coverage_depth_min",
+                      "min_read_length", "coverage_depth_min", "callable_min_size",
                       "min_allele_fraction",
                       "remove_lcr", "joint_group_size",
                       "archive", "tools_off", "tools_on", "assemble_transcripts",
                       "mixup_check", "priority_regions", "expression_caller"] +
+                     # development
+                     ["cwl_reporting"] +
                      # back compatibility
                       ["coverage_depth_max", "coverage_depth"])
 ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr",
                           "clinical_reporting", "transcriptome_align",
                           "fusion_mode", "assemble_transcripts", "trim_reads",
-                          "recalibrate", "realign"])
+                          "recalibrate", "realign", "cwl_reporting"])
 ALG_ALLOW_FALSE = set(["aligner", "bam_clean", "bam_sort",
                        "effects", "phasing", "mixup_check", "indelcaller",
                        "variantcaller"])
@@ -505,7 +548,7 @@ def _file_to_abs(x, dnames, makedir=False):
                     return normx
         raise ValueError("Did not find input file %s in %s" % (x, dnames))
 
-def _normalize_files(item, fc_dir):
+def _normalize_files(item, fc_dir=None):
     """Ensure the files argument is a list of absolute file names.
     Handles BAM, single and paired end fastq.
     """
@@ -600,7 +643,9 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names=None):
         elif "files" in item:
             del item["files"]
         if item.get("vrn_file") and isinstance(item["vrn_file"], basestring):
-            item["vrn_file"] = vcfutils.bgzip_and_index(genome.abs_file_paths(item["vrn_file"]), config)
+            inputs_dir = utils.safe_makedir(os.path.join(dirs.get("work", os.getcwd()), "inputs"))
+            item["vrn_file"] = vcfutils.bgzip_and_index(genome.abs_file_paths(item["vrn_file"]), config,
+                                                        remove_orig=False, out_dir=inputs_dir)
         item = _clean_metadata(item)
         item = _clean_algorithm(item)
         # Add any global resource specifications
@@ -635,6 +680,8 @@ def _add_algorithm_defaults(algorithm):
         if k in convert_to_list:
             if v and not isinstance(v, (list, tuple)):
                 algorithm[k] = [v]
+            elif v is None:
+                algorithm[k] = []
     return algorithm
 
 def _replace_global_vars(xs, global_vars):

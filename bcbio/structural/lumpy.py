@@ -12,6 +12,7 @@ import shutil
 import vcf
 
 from bcbio import utils
+from bcbio.bam import ref
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
 from bcbio.pipeline import datadict as dd
 from bcbio.provenance import do
@@ -52,7 +53,9 @@ def _filter_by_support(in_file, data):
       - Large calls need split read evidence.
     """
     rc_filter = ("FORMAT/SU < 4 || "
-                 "(FORMAT/SR == 0 && ABS(SVLEN)>50000)")
+                 "(FORMAT/SR == 0 && FORMAT/SU < 15 && ABS(SVLEN)>50000) || "
+                 "(FORMAT/SR == 0 && FORMAT/SU < 5 && ABS(SVLEN)<2000) || "
+                 "(FORMAT/SR == 0 && FORMAT/SU < 15 && ABS(SVLEN)<300)")
     return vfilter.hard_w_expression(in_file, rc_filter, data, name="ReadCountSupport",
                                      limit_regions=None)
 
@@ -127,7 +130,12 @@ def run(items):
         sample_vcf = vcfutils.select_sample(lumpy_vcf, sample,
                                             utils.append_stem(lumpy_vcf, "-%s" % sample),
                                             data["config"])
-        gt_vcf = _run_svtyper(sample_vcf, dedup_bam, sr_bam, data)
+        std_vcf, bnd_vcf = _split_breakends(sample_vcf, data)
+        std_gt_vcf = _run_svtyper(std_vcf, dedup_bam, sr_bam, exclude_file, data)
+        gt_vcf = vcfutils.concat_variant_files_bcftools(
+            orig_files=[std_gt_vcf, bnd_vcf],
+            out_file="%s-combined.vcf.gz" % utils.splitext_plus(std_gt_vcf)[0],
+            config=data["config"])
         gt_vcfs[dd.get_sample_name(data)] = _filter_by_support(gt_vcf, data)
     if paired and paired.normal_name:
         gt_vcfs = _filter_by_background([paired.tumor_name], [paired.normal_name], gt_vcfs, paired.tumor_data)
@@ -143,8 +151,36 @@ def run(items):
         out.append(data)
     return out
 
-def _run_svtyper(in_file, full_bam, sr_bam, data):
+def _split_breakends(in_file, data):
+    """Skip genotyping on breakends. This is often slow in high depth regions with many breakends.
+    """
+    bnd_file = "%s-bnd.vcf.gz" % utils.splitext_plus(in_file)[0]
+    std_file = "%s-std.vcf.gz" % utils.splitext_plus(in_file)[0]
+    if not utils.file_uptodate(bnd_file, in_file):
+        with file_transaction(data, bnd_file) as tx_out_file:
+            cmd = """bcftools view -O z -o {tx_out_file} -i "SVTYPE='BND'" {in_file}"""
+            do.run(cmd.format(**locals()), "Select Lumpy breakends")
+    vcfutils.bgzip_and_index(bnd_file, data["config"])
+    if not utils.file_uptodate(std_file, in_file):
+        with file_transaction(data, std_file) as tx_out_file:
+            cmd = """bcftools view -O z -o {tx_out_file} -e "SVTYPE='BND'" {in_file}"""
+            do.run(cmd.format(**locals()), "Select Lumpy non-breakends")
+    vcfutils.bgzip_and_index(std_file, data["config"])
+    return std_file, bnd_file
+
+def run_svtyper_prioritize(call):
+    """Run svtyper on prioritized outputs, adding in typing for breakends skipped earlier.
+    """
+    def _run(in_file, work_dir, data):
+        dedup_bam, sr_bam, _ = sshared.get_split_discordants(data, work_dir)
+        return _run_svtyper(in_file, dedup_bam, sr_bam, call.get("exclude_file"), data)
+    return _run
+
+def _run_svtyper(in_file, full_bam, sr_bam, exclude_file, data):
     """Genotype structural variant calls with SVtyper.
+
+    Removes calls in high depth regions to avoid slow runtimes:
+    https://github.com/hall-lab/svtyper/issues/16
     """
     out_file = "%s-wgts.vcf.gz" % utils.splitext_plus(in_file)[0]
     if not utils.file_uptodate(out_file, in_file):
@@ -154,8 +190,24 @@ def _run_svtyper(in_file, full_bam, sr_bam, data):
             else:
                 python = sys.executable
                 svtyper = os.path.join(os.path.dirname(sys.executable), "svtyper")
-                cmd = ("gunzip -c {in_file} | "
-                       "{python} {svtyper} -B {full_bam} -S {sr_bam} | "
+                if exclude_file and utils.file_exists(exclude_file):
+                    regions_to_rm = "-T ^%s" % (exclude_file)
+                else:
+                    regions_to_rm = ""
+                # add FILTER headers, which are lost during svtyping
+                header_file = "%s-header.txt" % utils.splitext_plus(tx_out_file)[0]
+                with open(header_file, "w") as out_handle:
+                    with utils.open_gzipsafe(in_file) as in_handle:
+                        for line in in_handle:
+                            if not line.startswith("#"):
+                                break
+                            if line.startswith("##FILTER"):
+                                out_handle.write(line)
+                    for region in ref.file_contigs(dd.get_ref_file(data), data["config"]):
+                        out_handle.write("##contig=<ID=%s,length=%s>\n" % (region.name, region.size))
+                cmd = ("bcftools view {in_file} {regions_to_rm} | "
+                       "{python} {svtyper} -M -B {full_bam} -S {sr_bam} | "
+                       "bcftools annotate -h {header_file} | "
                        "bgzip -c > {tx_out_file}")
                 do.run(cmd.format(**locals()), "SV genotyping with svtyper")
     return vcfutils.sort_by_ref(out_file, data)

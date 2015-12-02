@@ -1,7 +1,32 @@
 ## 0.9.5 (in progress)
 
+- Add tRNA count and figures by tdrmapper for srna-seq pipeline.
+- Avoid running callability checks on smaller chromosomes less than 1 million
+  basepairs. Saves computation and disk IO on alt and support regions we don't
+  split on.
+- Enable nested batch specifications, allowing samples in partially overlapping
+  batches.
+- Speed improvements for Lumpy genotyping. Move to latest svtyper and avoid
+  genotyping breakends.
+- Allow use of VEP annotations on non-human analyses.
+- Remove ENCODE blacklist regions when calling with VarDict and FreeBayes on
+  whole genomes. Avoids long run times due to collapsed repeats near centromeres.
+- Update VarScan to 2.4.0 and rework support to allow piping between mpileup
+  and VarScan to avoid filesystem IO.
 - Annotate ensemble calls with information about supporting callers. Thanks to
   Pär Larsson and Son Pham.
+- Move eXpress to expression_caller instead of being run by default.
+- rRNA calculation uses the count file instead of using counts from GATK.
+- Merge STAR fusion calls back into the BAM file. Thanks to Miika Ahdesmaki.
+- Added preliminary support for the hisat2 aligner.
+- Swapped STAR indexing to use on the fly splice junction indexing.
+- Slightly inceased default DEXseq memory requirements in bcbio_system.yaml.
+- Add support for RNA-seq for hg38 and hg38-noalt
+- Make Sailfish the default for non-count based expression estimation.
+  Produces isoform-level (combined.isoform.sf.tpm) and gene-level
+  (combined.gene.sf.tpm) TPM expression estimation.
+- Move Cufflinks to be off by default for expression estimation (turn on via
+  expression_callers if needed).
 
 ## 0.9.4 (14 October 2015)
 

@@ -83,13 +83,13 @@ def get_paired_phenotype(data):
 
 # ## General utilities
 
-def fix_ambiguous_cl():
+def fix_ambiguous_cl(column=4):
     """awk command to replace non-N ambiguous REF bases with N.
 
     Some callers include these if present in the reference genome but GATK does
     not like them.
     """
-    return r"""awk -F$'\t' -v OFS='\t' '{if ($0 !~ /^#/) gsub(/[KMRYSWBVHDX]/, "N", $4) } {print}'"""
+    return r"""awk -F$'\t' -v OFS='\t' '{if ($0 !~ /^#/) gsub(/[KMRYSWBVHDX]/, "N", $%s) } {print}'""" % column
 
 def remove_dup_cl():
     """awk command line to remove duplicate alleles where the ref and alt are the same.
@@ -307,12 +307,24 @@ def concat_variant_files(orig_files, out_file, regions, ref_file, config):
                 else:
                     raise
         if failed:
-            return concat_variant_files_bcftools(input_file_list, out_file, ref_file, config)
+            return _run_concat_variant_files_bcftools(input_file_list, out_file, config)
     if out_file.endswith(".gz"):
         bgzip_and_index(out_file, config)
     return out_file
 
-def concat_variant_files_bcftools(in_list, out_file, ref_file, config):
+def concat_variant_files_bcftools(orig_files, out_file, config):
+    if not utils.file_exists(out_file):
+        exist_files = [x for x in orig_files if os.path.exists(x)]
+        ready_files = run_multicore(p_bgzip_and_index, [[x, config] for x in exist_files], config)
+        input_file_list = "%s-files.list" % utils.splitext_plus(out_file)[0]
+        with open(input_file_list, "w") as out_handle:
+            for fname in ready_files:
+                out_handle.write(fname + "\n")
+        return _run_concat_variant_files_bcftools(input_file_list, out_file, config)
+    else:
+        return bgzip_and_index(out_file, config)
+
+def _run_concat_variant_files_bcftools(in_list, out_file, config):
     """Concatenate variant files using bcftools concat.
     """
     if not utils.file_exists(out_file):
@@ -357,11 +369,12 @@ def combine_variant_files(orig_files, out_file, ref_file, config,
             params.extend(["--genotypemergeoption", "PRIORITIZE"])
             if quiet_out:
                 params.extend(["--suppressCommandLineHeader", "--setKey", "null"])
-            variant_regions = config["algorithm"].get("variant_regions", None)
-            cur_region = shared.subset_variant_regions(variant_regions, region, out_file)
-            if cur_region:
-                params += ["-L", bamprep.region_to_gatk(cur_region),
-                           "--interval_set_rule", "INTERSECTION"]
+            if region:
+                variant_regions = config["algorithm"].get("variant_regions", None)
+                cur_region = shared.subset_variant_regions(variant_regions, region, out_file)
+                if cur_region:
+                    params += ["-L", bamprep.region_to_gatk(cur_region),
+                               "--interval_set_rule", "INTERSECTION"]
             cores = tz.get_in(["algorithm", "num_cores"], config, 1)
             if cores > 1:
                 params += ["-nt", min(cores, 4)]

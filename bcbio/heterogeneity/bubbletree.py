@@ -18,16 +18,18 @@ from bcbio.distributed.transaction import file_transaction
 from bcbio.log import logger
 from bcbio.pipeline import datadict as dd
 from bcbio.provenance import do
-from bcbio.heterogeneity import chromhacks, theta
+from bcbio.heterogeneity import chromhacks
+from bcbio.structural import shared
+from bcbio.variation import bedutils
 
 def run(vrn_info, calls_by_name, somatic_info):
     """Run BubbleTree given variant calls, CNVs and somatic
     """
-    work_dir = _cur_workdir(somatic_info.tumor_data)
-    vcf_csv = _prep_vrn_file(vrn_info["vrn_file"], vrn_info["variantcaller"], work_dir,
-                             calls_by_name, somatic_info)
     assert "cnvkit" in calls_by_name, "BubbleTree only currently support CNVkit"
     cnv_info = calls_by_name["cnvkit"]
+    work_dir = _cur_workdir(somatic_info.tumor_data)
+    vcf_csv = _prep_vrn_file(vrn_info["vrn_file"], vrn_info["variantcaller"], cnv_info["cns"],
+                             work_dir, calls_by_name, somatic_info)
     cnv_csv = _prep_cnv_file(cnv_info["cns"], cnv_info["variantcaller"], calls_by_name, work_dir,
                              somatic_info.tumor_data)
     _run_bubbletree(vcf_csv, cnv_csv, somatic_info.tumor_data)
@@ -39,9 +41,11 @@ def _run_bubbletree(vcf_csv, cnv_csv, data):
                                  "lib", "R", "site-library")
     base = utils.splitext_plus(vcf_csv)[0]
     r_file = "%s-run.R" % base
-    bubbles_out = "%s-bubbles.pdf" % base
-    prev_model_out = "%s-bubbletree_prev_model.pdf" % base
+    bubbleplot_out = "%s-bubbleplot.pdf" % base
+    trackplot_out = "%s-trackplot.pdf" % base
+    calls_out = "%s-calls.rds" % base
     freqs_out = "%s-bubbletree_prevalence.txt" % base
+    sample = dd.get_sample_name(data)
     with open(r_file, "w") as out_handle:
         out_handle.write(_script.format(**locals()))
     if not utils.file_exists(freqs_out):
@@ -67,8 +71,9 @@ def _cns_to_coords(line):
 def _prep_cnv_file(cns_file, svcaller, calls_by_name, work_dir, data):
     """Create a CSV file of CNV calls with log2 and number of marks.
     """
-    in_file = theta.subset_by_supported(cns_file, _cns_to_coords, calls_by_name, work_dir, data,
-                                        headers=("chromosome", "#"))
+    # in_file = theta.subset_by_supported(cns_file, _cns_to_coords, calls_by_name, work_dir, data,
+    #                                     headers=("chromosome", "#"))
+    in_file = cns_file
     out_file = os.path.join(work_dir, "%s-%s-prep.csv" % (utils.splitext_plus(os.path.basename(in_file))[0],
                                                           svcaller))
     if not utils.file_uptodate(out_file, in_file):
@@ -84,20 +89,20 @@ def _prep_cnv_file(cns_file, svcaller, calls_by_name, work_dir, data):
                             writer.writerow([_to_ucsc_style(chrom), start, end, probes, log2])
     return out_file
 
-def _prep_vrn_file(in_file, vcaller, work_dir, calls_by_name, somatic_info):
+def _prep_vrn_file(in_file, vcaller, seg_file, work_dir, calls_by_name, somatic_info):
     """Select heterozygous variants in the normal sample with sufficient depth.
     """
     data = somatic_info.tumor_data
     params = {"min_freq": 0.4,
               "max_freq": 0.6,
+              "tumor_only": {"min_freq": 0.15, "max_freq": 0.85},
               "min_depth": 15,
               "hetblock": {"min_alleles": 25,
                            "allowed_misses": 2}}
     out_file = os.path.join(work_dir, "%s-%s-prep.csv" % (utils.splitext_plus(os.path.basename(in_file))[0],
                                                           vcaller))
     if not utils.file_uptodate(out_file, in_file):
-        ready_bed = _identify_heterogenity_blocks(in_file, params, work_dir, somatic_info)
-        #ready_bed = _remove_sv_calls(het_bed, calls_by_name, somatic_info.tumor_data)
+        ready_bed = _identify_heterogeneity_blocks_seg(in_file, seg_file, params, work_dir, somatic_info)
         sub_file = _create_subset_file(in_file, ready_bed, work_dir, data)
         with file_transaction(data, out_file) as tx_out_file:
             with open(tx_out_file, "w") as out_handle:
@@ -110,45 +115,60 @@ def _prep_vrn_file(in_file, vcaller, work_dir, calls_by_name, somatic_info):
                         writer.writerow([_to_ucsc_style(rec.chrom), rec.start, rec.stop, tumor_freq])
     return out_file
 
-def _remove_sv_calls(in_file, calls_by_name, data):
-    """Remove heterogeneity blocks that overlap structural variant calls.
+def _identify_heterogeneity_blocks_seg(in_file, seg_file, params, work_dir, somatic_info):
+    """Identify heterogeneity blocks corresponding to segmentation from CNV input file.
     """
-    out_file = "%s-nosvs%s" % utils.splitext_plus(in_file)
-    if not utils.file_uptodate(out_file, in_file):
-        with file_transaction(data, out_file) as tx_out_file:
-            pass
-    return out_file
+    def _segment_by_cns(target_chrom, freqs, coords):
+        with open(seg_file) as in_handle:
+            reader = csv.reader(in_handle, dialect="excel-tab")
+            reader.next()  # header
+            for cur_chrom, start, end in (xs[:3] for xs in reader):
+                if cur_chrom == target_chrom:
+                    block_freqs = []
+                    for i, (freq, coord) in enumerate(zip(freqs, coords)):
+                        if coord >= int(start) and coord < int(end):
+                            block_freqs.append(freq)
+                        elif coord >= int(end):
+                            break
+                    coords = coords[max(0, i - 1):]
+                    freqs = freqs[max(0, i - 1):]
+                    if len(block_freqs) > params["hetblock"]["min_alleles"]:
+                        yield start, end
+    return _identify_heterogeneity_blocks_shared(in_file, _segment_by_cns, params, work_dir, somatic_info)
 
-def _identify_heterogenity_blocks(in_file, params, work_dir, somatic_info):
+def _identify_heterogeneity_blocks_hmm(in_file, params, work_dir, somatic_info):
     """Use a HMM to identify blocks of heterogeneity to use for calculating allele frequencies.
 
     The goal is to subset the genome to a more reasonable section that contains potential
     loss of heterogeneity or other allele frequency adjustment based on selection.
     """
+    def _segment_by_hmm(chrom, freqs, coords):
+        cur_coords = []
+        for j, state in enumerate(_predict_states(freqs)):
+            if state == 0:  # heterozygote region
+                if len(cur_coords) == 0:
+                    num_misses = 0
+                cur_coords.append(coords[j])
+            else:
+                num_misses += 1
+            if num_misses > params["hetblock"]["allowed_misses"]:
+                if len(cur_coords) >= params["hetblock"]["min_alleles"]:
+                    yield min(cur_coords), max(cur_coords)
+                cur_coords = []
+        if len(cur_coords) >= params["hetblock"]["min_alleles"]:
+            yield min(cur_coords), max(cur_coords)
+    return _identify_heterogeneity_blocks_shared(in_file, _segment_by_hmm, params, work_dir, somatic_info)
+
+def _identify_heterogeneity_blocks_shared(in_file, segment_fn, params, work_dir, somatic_info):
+    """Identify heterogeneity blocks corresponding to segmentation from CNV input file.
+    """
     out_file = os.path.join(work_dir, "%s-hetblocks.bed" % utils.splitext_plus(os.path.basename(in_file))[0])
     if not utils.file_uptodate(out_file, in_file):
-        chroms, freqs, coords = _freqs_by_chromosome(in_file, params, somatic_info)
-        blocks = []
-        for i, chrom in enumerate(chroms):
-            cur_coords = []
-            num_misses = 0
-            for j, state in enumerate(_predict_states(freqs[i])):
-                if state == 0:  # heterozygote region
-                    if len(cur_coords) == 0:
-                        num_misses = 0
-                    cur_coords.append(coords[i][j])
-                else:
-                    num_misses += 1
-                if num_misses > params["hetblock"]["allowed_misses"]:
-                    if len(cur_coords) >= params["hetblock"]["min_alleles"]:
-                        blocks.append((chrom, min(cur_coords), max(cur_coords)))
-                    cur_coords = []
-            if len(cur_coords) >= params["hetblock"]["min_alleles"]:
-                blocks.append((chrom, min(cur_coords), max(cur_coords)))
         with file_transaction(somatic_info.tumor_data, out_file) as tx_out_file:
             with open(tx_out_file, "w") as out_handle:
-                for chrom, start, end in blocks:
-                    out_handle.write("%s\t%s\t%s\n" % (chrom, start, end))
+                for chrom, freqs, coords in _freqs_by_chromosome(in_file, params, somatic_info):
+                    for start, end in segment_fn(chrom, freqs, coords):
+                        out_handle.write("%s\t%s\t%s\n" % (chrom, start, end))
     return out_file
 
 def _predict_states(freqs):
@@ -172,27 +192,32 @@ def _predict_states(freqs):
 def _freqs_by_chromosome(in_file, params, somatic_info):
     """Retrieve frequencies across each chromosome as inputs to HMM.
     """
-    chroms = []
     freqs = []
     coords = []
+    cur_chrom = None
     with pysam.VariantFile(in_file) as bcf_in:
         for rec in bcf_in:
-            if _is_biallelic_snp(rec) and chromhacks.is_autosomal(rec.chrom):
-                if len(chroms) == 0 or rec.chrom != chroms[-1]:
-                    chroms.append(rec.chrom)
-                    freqs.append([])
-                    coords.append([])
+            if _is_biallelic_snp(rec) and _passes_plus_germline(rec) and chromhacks.is_autosomal(rec.chrom):
+                if cur_chrom is None or rec.chrom != cur_chrom:
+                    if cur_chrom and len(freqs) > 0:
+                        yield cur_chrom, freqs, coords
+                    cur_chrom = rec.chrom
+                    freqs = []
+                    coords = []
                 stats = _tumor_normal_stats(rec, somatic_info)
-                if tz.get_in(["normal", "depth"], stats, 0) > params["min_depth"]:
+                if tz.get_in(["tumor", "depth"], stats, 0) > params["min_depth"]:
                     # not a ref only call
                     if sum(rec.samples[somatic_info.tumor_name].allele_indices) > 0:
-                        freqs[-1].append(tz.get_in(["normal", "freq"], stats))
-                        coords[-1].append(rec.start)
-    return chroms, freqs, coords
+                        freqs.append(tz.get_in(["tumor", "freq"], stats))
+                        coords.append(rec.start)
+        if cur_chrom and len(freqs) > 0:
+            yield cur_chrom, freqs, coords
 
-def _create_subset_file(in_file, region_bed, work_dir, data):
+def _create_subset_file(in_file, het_region_bed, work_dir, data):
     """Subset the VCF to a set of pre-calculated smaller regions.
     """
+    cnv_regions = shared.get_base_cnv_regions(data, work_dir)
+    region_bed = bedutils.intersect_two(het_region_bed, cnv_regions, work_dir, data)
     out_file = os.path.join(work_dir, "%s-origsubset.bcf" % utils.splitext_plus(os.path.basename(in_file))[0])
     if not utils.file_uptodate(out_file, in_file):
         with file_transaction(data, out_file) as tx_out_file:
@@ -206,6 +231,13 @@ def _to_ucsc_style(chrom):
     """
     return "chr%s" % chrom if not str(chrom).startswith("chr") else chrom
 
+def _passes_plus_germline(rec):
+    """Check if a record passes filters (but might be germline -- labelled with REJECT).
+    """
+    allowed = set(["PASS", "REJECT"])
+    filters = [x for x in rec.filter.keys() if x not in allowed]
+    return len(filters) > 0
+
 def _is_biallelic_snp(rec):
     return _is_snp(rec) and len(rec.alts) == 1
 
@@ -215,7 +247,7 @@ def _is_snp(rec):
 def _tumor_normal_stats(rec, somatic_info):
     """Retrieve depth and frequency of tumor and normal samples.
     """
-    out = {"normal": {"depth": 0, "freq": None},
+    out = {"normal": {"depth": None, "freq": None},
            "tumor": {"depth": 0, "freq": None}}
     for name, sample in rec.samples.items():
         alt, depth = sample_alt_and_depth(sample)
@@ -234,13 +266,18 @@ def _is_possible_loh(rec, params, somatic_info):
 
     Only returns SNPs, since indels tend to have less precise frequency measurements.
     """
-    if _is_biallelic_snp(rec):
+    if _is_biallelic_snp(rec) and _passes_plus_germline(rec):
         stats = _tumor_normal_stats(rec, somatic_info)
-        if all([tz.get_in([x, "depth"], stats) > params["min_depth"] for x in ["normal", "tumor"]]):
-            if((tz.get_in(["normal", "freq"], stats) >= params["min_freq"]
-                and tz.get_in(["normal", "freq"], stats) <= params["max_freq"])
-               and (tz.get_in(["tumor", "freq"], stats) < params["min_freq"]
-                    or tz.get_in(["tumor", "freq"], stats) > params["max_freq"])):
+        depths = [tz.get_in([x, "depth"], stats) for x in ["normal", "tumor"]]
+        depths = [d for d in depths if d is not None]
+        normal_freq = tz.get_in(["normal", "freq"], stats)
+        tumor_freq = tz.get_in(["tumor", "freq"], stats)
+        if all([d > params["min_depth"] for d in depths]):
+            if normal_freq is not None:
+                if normal_freq >= params["min_freq"] and normal_freq <= params["max_freq"]:
+                    return stats["tumor"]["freq"]
+            elif (tumor_freq >= params["tumor_only"]["min_freq"] and
+                    tumor_freq <= params["tumor_only"]["max_freq"]):
                 return stats["tumor"]["freq"]
 
 def sample_alt_and_depth(sample):
@@ -269,7 +306,6 @@ def _cur_workdir(data):
 
 if __name__ == "__main__":
     import sys
-    import collections
     bcf_in = pysam.VariantFile(sys.argv[1])
     somatic = collections.namedtuple("Somatic", "normal_name,tumor_name")
     params = {"min_freq": 0.4,
@@ -283,26 +319,56 @@ _script = """
 .libPaths(c("{local_sitelib}"))
 library(BubbleTree)
 library(GenomicRanges)
+library(ggplot2)
 
 vc.df = read.csv("{vcf_csv}", header=T)
-vc.gr = GRanges(vc.df$chrom, IRanges(vc.df$start, vc.df$end), freq=vc.df$freq)
+vc.gr = GRanges(vc.df$chrom, IRanges(vc.df$start, vc.df$end),
+                freq=vc.df$freq, score=vc.df$freq)
 
 cnv.df = read.csv("{cnv_csv}", header=T)
 cnv.gr = GRanges(cnv.df$chrom, IRanges(cnv.df$start, cnv.df$end),
-                 num.mark=cnv.df$num.mark, seg.mean=cnv.df$seg.mean)
+                 num.mark=cnv.df$num.mark, seg.mean=cnv.df$seg.mean,
+                 score=cnv.df$seg.mean)
 print(vc.gr)
 print(cnv.gr)
 
-rbd = getRBD(snp.gr=vc.gr, cnv.gr=cnv.gr)
-pdf(file="{bubbles_out}", width=8, height=6)
-plotBubbles(rbd)
-dev.off()
-pur = calc.prev(rbd, heurx=FALSE, modex=5, plotx="{prev_model_out}")
+r <- new("RBD")
+rbd <- makeRBD(r, vc.gr, cnv.gr)
+print(head(rbd))
+calls <- new("BTreePredictor", rbd=rbd)
+calls <- btpredict(calls)
 
-sink("{freqs_out}")
-# tumor subclone freqencies
-print(pur[[1]]$ploidy_prev)
-# tumor purity
-print(pur[[2]][nrow(pur[[2]]),2])
-sink()
+saveRDS(calls, "{calls_out}")
+
+purity <- calls@result$prev[1]
+adj <- calls@result$ploidy.adj["adj"]
+# when purity is low the calculation result is not reliable
+ploidy <- (2*adj -2)/purity + 2
+out <- data.frame(sample="{sample}",
+                  purity=round(purity,3),
+                  prevalences=paste(round(calls@result$prev,3), collapse=";"),
+                  tumor_ploidy=round(ploidy,1))
+write.csv(out, file="{freqs_out}", row.names=FALSE)
+
+title <- sprintf("{sample} (%s)", info(calls))
+
+# XXX Needs to be generalized for non-build 37/hg19 plots
+# hg19.seqinfo is hardcoded in TrackPlotter but we might
+# be able to work around with just an external centromere.dat import
+load(system.file("data", "centromere.dat.rda", package="BubbleTree"))
+load(system.file("data", "hg19.seqinfo.rda", package="BubbleTree"))
+trackplotter <- new("TrackPlotter")
+z1 <- heteroLociTrack(trackplotter,  calls@result, centromere.dat, vc.gr) + ggplot2::labs(title=title)
+z2 <- RscoreTrack(trackplotter, calls@result, centromere.dat, cnv.gr)
+t2 <- getTracks(z1, z2)
+pdf(file="{trackplot_out}", width=8, height=6)
+g <- gridExtra::grid.arrange(t2, ncol=1)
+print(g)
+dev.off()
+
+pdf(file="{bubbleplot_out}", width=8, height=6)
+btreeplotter <- new("BTreePlotter")
+g <- drawBTree(btreeplotter, calls@rbd.adj) + ggplot2::labs(title=title)
+print(g)
+dev.off()
 """

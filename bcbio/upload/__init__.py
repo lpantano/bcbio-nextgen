@@ -58,6 +58,7 @@ def _get_files_rnaseq(sample):
     algorithm = sample["config"]["algorithm"]
     out = _maybe_add_summary(algorithm, sample, out)
     out = _maybe_add_alignment(algorithm, sample, out)
+    out = _maybe_add_transcriptome_alignment(sample, out)
     out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_counts(algorithm, sample, out)
     out = _maybe_add_cufflinks(algorithm, sample, out)
@@ -110,6 +111,7 @@ def _get_files_variantcall(sample):
     out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_variant_file(algorithm, sample, out)
     out = _maybe_add_sv(algorithm, sample, out)
+    out = _maybe_add_hla(algorithm, sample, out)
     out = _maybe_add_validate(algorithm, sample, out)
     return _add_meta(out, sample)
 
@@ -144,6 +146,13 @@ def _maybe_add_variant_file(algorithm, sample, out):
                                 "type": ext,
                                 "ext": "%s-%s" % (x["variantcaller"], extra),
                                 "variantcaller": x["variantcaller"]})
+    return out
+
+def _maybe_add_hla(algorithm, sample, out):
+    if sample.get("align_bam") is not None and sample.get("hla"):
+        out.append({"path": sample["hla"]["call_file"],
+                    "type": "csv",
+                    "ext": "hla-%s" % (sample["hla"]["hlacaller"])})
     return out
 
 def _maybe_add_sv(algorithm, sample, out):
@@ -196,7 +205,7 @@ def _get_variant_file(x, key):
                             "index": True,
                             "ext": x["variantcaller"],
                             "variantcaller": x["variantcaller"]})
-        elif fname.endswith((".vcf", ".bed", ".bedpe", ".bedgraph", ".cnr", ".cns", ".cnn", ".txt")):
+        elif fname.endswith((".vcf", ".bed", ".bedpe", ".bedgraph", ".cnr", ".cns", ".cnn", ".txt", ".tsv")):
             ftype = utils.splitext_plus(fname)[-1][1:]
             if ftype == "txt":
                 ftype = fname.split("-")[-1]
@@ -207,7 +216,7 @@ def _get_variant_file(x, key):
     return out
 
 def _maybe_add_sailfish_files(algorithm, sample, out):
-    if "sailfish" in dd.get_expression_caller(sample):
+    if dd.get_sailfish_dir(sample):
         out.append({"path": dd.get_sailfish_dir(sample),
                     "type": "directory",
                     "ext": os.path.join("sailfish", dd.get_sample_name(sample))})
@@ -271,6 +280,14 @@ def _maybe_add_disambiguate(algorithm, sample, out):
                                 "plus": True,
                                 "index": True,
                                 "ext": "disambiguate-%s" % extra_name})
+    return out
+
+def _maybe_add_transcriptome_alignment(sample, out):
+    transcriptome_bam = dd.get_transcriptome_bam(sample)
+    if transcriptome_bam and utils.file_exists(transcriptome_bam):
+        out.append({"path": transcriptome_bam,
+                    "type": "bam",
+                    "ext": "transcriptome"})
     return out
 
 def _maybe_add_counts(algorithm, sample, out):
@@ -340,6 +357,11 @@ def _get_files_project(sample, upload_config):
         out.append({"path": sample["summary"]["mixup_check"],
                     "type": "directory", "ext": "mixup_check"})
 
+    report = os.path.join(dd.get_work_dir(sample), "report")
+    if utils.file_exists(report):
+        out.append({"path": report,
+            "type": "directory", "ext": "report"})
+
     if sample.get("seqcluster", None):
         out.append({"path": sample["seqcluster"],
                     "type": "directory", "ext": "seqcluster"})
@@ -369,6 +391,10 @@ def _get_files_project(sample, upload_config):
         if all_coverage:
             out.append({"path": all_coverage, "type": "bed", "ext": "coverage"})
 
+    if dd.get_mirna_counts(sample):
+        out.append({"path": dd.get_mirna_counts(sample)})
+    if dd.get_isomir_counts(sample):
+        out.append({"path": dd.get_isomir_counts(sample)})
     if dd.get_combined_counts(sample):
         out.append({"path": dd.get_combined_counts(sample)})
     if dd.get_annotated_combined_counts(sample):
@@ -391,5 +417,10 @@ def _get_files_project(sample, upload_config):
         out.append({"path": dd.get_isoform_to_gene(sample)})
     if dd.get_square_vcf(sample):
         out.append({"path": dd.get_square_vcf(sample)})
-
+    if dd.get_sailfish_tidy(sample):
+        out.append({"path": dd.get_sailfish_tidy(sample)})
+    if dd.get_sailfish_transcript_tpm(sample):
+        out.append({"path": dd.get_sailfish_transcript_tpm(sample)})
+    if dd.get_sailfish_gene_tpm(sample):
+        out.append({"path": dd.get_sailfish_gene_tpm(sample)})
     return _add_meta(out, config=upload_config)

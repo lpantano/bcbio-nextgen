@@ -129,9 +129,10 @@ def _rtg_add_summary_file(eval_files, base_dir, data):
                 writer.writerow(["sample", "caller", "vtype", "metric", "value"])
                 base = _get_sample_and_caller(data)
                 for metric in ["tp", "fp", "fn"]:
-                    for vtype, bcftools_types in [("SNPs", "snps"), ("Indels", "indels,mnps,other")]:
+                    for vtype, bcftools_types in [("SNPs", "--types snps"),
+                                                  ("Indels", "--exclude-types snps")]:
                         in_file = eval_files[metric]
-                        cmd = ("bcftools view --types {bcftools_types} {in_file} | grep -v ^# | wc -l")
+                        cmd = ("bcftools view {bcftools_types} {in_file} | grep -v ^# | wc -l")
                         count = int(subprocess.check_output(cmd.format(**locals()), shell=True))
                         writer.writerow(base + [vtype, metric, count])
     eval_files["summary"] = out_file
@@ -159,17 +160,21 @@ def _run_rtg_eval(vrn_file, rm_file, rm_interval_file, base_dir, data):
                                                 "%s.sdf" % (os.path.splitext(ref_filebase)[0])))
         assert os.path.exists(rtg_ref), ("Did not find rtg indexed reference file for validation:\n%s\n"
                                          "Run bcbio_nextgen.py upgrade --data --aligners rtg" % rtg_ref)
-        cmd = ["rtg", "vcfeval",
+        cmd = ["rtg", "vcfeval", "--threads", "6",
                "-b", rm_file, "--bed-regions", interval_bed,
                "-c", vrn_file, "-t", rtg_ref, "-o", out_dir]
         caller = _get_caller(data)
         # flexible quality scores for building ROC curves, handle multiple cases
         # MuTect has no quality scores
+        # not clear how to get t_lod_fstar into VCF cleanly
         if caller == "mutect":
-            cmd +=  ["--vcf-score-field=BQ"]
-        # otherwise use quality score as a standarde
+            cmd += ["--vcf-score-field=BQ"]
+        # otherwise use quality score as a standard
+        # Discussion point: is it worth using caller specific annotations or settling
+        # on a single metric for comparison
         else:
-            cmd +=  ["--vcf-score-field=QUAL"]
+            cmd += ["--vcf-score-field=QUAL"]
+        cmd = "export RTG_JAVA_OPTS='-Xms1g' export RTG_MEM=5g && " + " ".join(cmd)
         do.run(cmd, "Validate calls using rtg vcfeval", data)
     return {"tp": os.path.join(out_dir, "tp.vcf.gz"),
             "fp": os.path.join(out_dir, "fp.vcf.gz"),
@@ -354,7 +359,7 @@ def summarize_grading(samples):
             writer.writerow(header)
             plot_data = []
             plot_files = []
-            for data in vitems:
+            for data in sorted(vitems, key=lambda x: x.get("lane", dd.get_sample_name(x))):
                 for variant in data.get("variants", []):
                     if variant.get("validate"):
                         variant["validate"]["grading_summary"] = out_csv

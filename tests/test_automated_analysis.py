@@ -82,7 +82,7 @@ class AutomatedAnalysisTest(unittest.TestCase):
         """
         DlInfo = collections.namedtuple("DlInfo", "fname dirname version")
         download_data = [DlInfo("110106_FC70BUKAAXX.tar.gz", None, None),
-                         DlInfo("genomes_automated_test.tar.gz", "genomes", 25),
+                         DlInfo("genomes_automated_test.tar.gz", "genomes", 26),
                          DlInfo("110907_ERP000591.tar.gz", None, None),
                          DlInfo("100326_FC6107FAAXX.tar.gz", None, 8),
                          DlInfo("tcga_benchmark.tar.gz", None, 3)]
@@ -203,6 +203,20 @@ class AutomatedAnalysisTest(unittest.TestCase):
                   get_post_process_yaml(self.data_dir, workdir),
                   os.path.join(self.data_dir, os.pardir, "110907_ERP000591"),
                   os.path.join(self.data_dir, "run_info-star.yaml")]
+            subprocess.check_call(cl)
+
+    @attr(rnaseq=True)
+    @attr(rnaseq_standard=True)
+    @attr(hisat2=True)
+    def test_2_hisat2(self):
+        """Run an RNA-seq analysis with hisat2 and generate gene-level counts.
+        """
+        self._install_test_files(self.data_dir)
+        with make_workdir() as workdir:
+            cl = ["bcbio_nextgen.py",
+                  get_post_process_yaml(self.data_dir, workdir),
+                  os.path.join(self.data_dir, os.pardir, "110907_ERP000591"),
+                  os.path.join(self.data_dir, "run_info-hisat2.yaml")]
             subprocess.check_call(cl)
 
     @attr(explant=True)
@@ -366,3 +380,46 @@ class AutomatedAnalysisTest(unittest.TestCase):
                   os.path.join(self.data_dir, "run_info-bam.yaml"),
                   "lsf", "localrun"]
             subprocess.check_call(cl)
+
+class CWLTest(unittest.TestCase):
+    """ Run simple CWL workflows.
+
+    Requires https://github.com/chapmanb/bcbio-nextgen-vm
+    """
+    def setUp(self):
+        self.data_dir = os.path.join(os.path.dirname(__file__), "data", "automated")
+
+    @attr(speed=2)
+    @attr(cwl=True)
+    @attr(cwl_local=True)
+    def test_1_cwl_local(self):
+        """Create a common workflow language description and run on local installation.
+        """
+        with make_workdir() as workdir:
+            cl = ["bcbio_vm.py", "cwl", "../data/automated/run_info-bam.yaml",
+                  "--systemconfig", get_post_process_yaml(self.data_dir, workdir)]
+            subprocess.check_call(cl)
+            out_base = "run_info-bam-workflow/run_info-bam-main"
+            cl = ["cwltool", "--verbose", "--preserve-environment", "PATH", "HOME", "--no-container",
+                  out_base + ".cwl", out_base + "-samples.json"]
+            subprocess.check_call(cl)
+            print
+            print "To run with a CWL tool, cd test_automated_output and:"
+            print " ".join(cl)
+
+    @attr(speed=2)
+    @attr(cwl=True)
+    @attr(cwl_docker=True)
+    def test_2_cwl_docker(self):
+        """Create a common workflow language description and run on a Docker installation.
+        """
+        with make_workdir() as workdir:
+            cl = ["bcbio_vm.py", "cwl", "../data/automated/run_info-bam.yaml",
+                  "--systemconfig", get_post_process_yaml(self.data_dir, workdir)]
+            subprocess.check_call(cl)
+            out_base = "run_info-bam-workflow/run_info-bam-main"
+            cl = ["cwltool", "--verbose", out_base + ".cwl", out_base + "-samples.json"]
+            subprocess.check_call(cl)
+            print
+            print "To run with a CWL tool, cd test_automated_output and:"
+            print " ".join(cl)

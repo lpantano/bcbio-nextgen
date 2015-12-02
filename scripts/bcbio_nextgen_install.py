@@ -95,7 +95,7 @@ def bootstrap_bcbionextgen(anaconda, args, remotes):
     return out
 
 def install_conda_pkgs(anaconda):
-    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "gffutils",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "cyvcf2", "gffutils",
             "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
@@ -252,7 +252,7 @@ if __name__ == "__main__":
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
                         action="append", default=[],
-                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5"
+                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5",
                                  "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
                                  "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"])
     parser.add_argument("--aligners", help="Aligner indexes to download",

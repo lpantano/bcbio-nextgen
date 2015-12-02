@@ -1,5 +1,6 @@
 import os
 import sys
+import glob
 import os.path as op
 import shutil
 from collections import Counter
@@ -11,10 +12,11 @@ except ImportError:
 
 from bcbio.utils import (file_exists, append_stem, replace_directory, symlink_plus)
 from bcbio.provenance import do
-from bcbio.distributed.transaction import file_transaction
+from bcbio.distributed.transaction import file_transaction, tx_tmpdir
 from bcbio import utils
 from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import config_utils
+from bcbio.log import logger
 
 
 def trim_srna_sample(data):
@@ -45,7 +47,7 @@ def trim_srna_sample(data):
     data["size_stats"] = _summary(data['collapse'])
     return [[data]]
 
-def mirbase(data):
+def sample_annotation(data):
     """
     Annotate miRNAs using miRBase database with seqbuster tool
     """
@@ -59,8 +61,8 @@ def mirbase(data):
                          "Please, run bcbio_nextgen.py upgrade -u skip --genome build_name.")
     mirbase = op.abspath(op.dirname(dd.get_mirbase_ref(data)))
 
-    mirbase = op.abspath(op.dirname(dd.get_mirbase_ref(data)))
     data['seqbuster'] = _miraligner(data["collapse"], out_file, dd.get_species(data), mirbase, data['config'])
+    data['trna'] = _trna_annotation(data)
     return [[data]]
 
 def _cmd_cutadapt():
@@ -109,13 +111,49 @@ def _miraligner(fastq_file, out_file, species, db_folder, config):
     parameters.
     """
     resources = config_utils.get_resources("miraligner", config)
+    miraligner = config_utils.get_program("miraligner", config)
     jvm_opts =  "-Xms750m -Xmx4g"
     if resources and resources.get("jvm_opts"):
         jvm_opts = " ".join(resources.get("jvm_opts"))
 
-    cmd = ("miraligner {jvm_opts} -freq -sub 1 -trim 3 -add 3 -s {species} -i {fastq_file} -db {db_folder}  -o {tx_out_file}")
+    cmd = ("{miraligner} {jvm_opts} -freq -sub 1 -trim 3 -add 3 -s {species} -i {fastq_file} -db {db_folder}  -o {tx_out_file}")
     if not file_exists(out_file + ".mirna"):
         with file_transaction(out_file) as tx_out_file:
             do.run(cmd.format(**locals()), "Do miRNA annotation for %s" % fastq_file)
+            if _old_version(tx_out_file + ".mirna"):
+                raise ValueError("Please install last version for miraligner."
+                                 "bcbio_nextgen.py upgrade -u deps --tools.")
             shutil.move(tx_out_file + ".mirna", out_file + ".mirna")
     return out_file + ".mirna"
+
+def _old_version(fn):
+    """Check if miraligner is old version."""
+    with open(fn) as in_handle:
+        h = in_handle.next()
+        if h.find("freq") == -1:
+            return True
+    return False
+
+def _trna_annotation(data):
+    """
+    use tDRmapper to quantify tRNAs
+    """
+    mirbase = op.abspath(op.dirname(dd.get_mirbase_ref(data)))
+    trna_ref = op.join(mirbase, "trna_mature_pre.fa")
+    name = dd.get_sample_name(data)
+    work_dir = utils.safe_makedir(os.path.join(dd.get_work_dir(data), "trna", name))
+    in_file = op.basename(data["clean_fastq"])
+    tdrmapper = os.path.join(os.path.dirname(sys.executable), "TdrMappingScripts.pl")
+    if not file_exists(trna_ref) or not file_exists(tdrmapper):
+        logger.info("There is no tRNA annotation to run TdrMapper.")
+        return None
+    out_file = op.join(work_dir, in_file + ".hq_cs.mapped")
+    if not file_exists(out_file):
+        with tx_tmpdir(data) as txdir:
+            with utils.chdir(txdir):
+                utils.symlink_plus(data["clean_fastq"], op.join(txdir, in_file))
+                cmd = ("perl {tdrmapper} {trna_ref} {in_file}").format(**locals())
+                do.run(cmd, "tRNA for %s" % name)
+                for filename in glob.glob("*mapped*"):
+                    shutil.move(filename, work_dir)
+    return out_file

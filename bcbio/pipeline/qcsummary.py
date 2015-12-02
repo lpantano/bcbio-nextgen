@@ -43,6 +43,7 @@ from bcbio import broad
 from bcbio.variation import coverage_experimental as cov
 from bcbio.variation.coverage import decorate_problem_regions
 from bcbio.ngsalign.postalign import dedup_bam
+from bcbio.rnaseq import gtf
 # ## High level functions to generate summary
 
 
@@ -437,13 +438,19 @@ def _run_fastqc(bam_file, data, fastqc_out):
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
             with utils.chdir(tx_tmp_dir):
                 cl = [config_utils.get_program("fastqc", data["config"]),
+                      "-d", tx_tmp_dir,
                       "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, "-f", frmt, bam_file]
                 do.run(cl, "FastQC: %s" % data["name"][-1])
                 tx_fastqc_out = os.path.join(tx_tmp_dir, "%s_fastqc" % fastqc_name)
                 tx_combo_file = os.path.join(tx_tmp_dir, "%s_fastqc.html" % fastqc_name)
                 if not os.path.exists(sentry_file) and os.path.exists(tx_combo_file):
                     utils.safe_makedir(fastqc_out)
-                    shutil.move(os.path.join(tx_fastqc_out, "fastqc_data.txt"), fastqc_out)
+                    # Use sample name for reports instead of bam file name
+                    with open(os.path.join(tx_fastqc_out, "fastqc_data.txt"), 'r') as fastqc_bam_name, \
+                            open(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), 'w') as fastqc_sample_name:
+                        for line in fastqc_bam_name:
+                            fastqc_sample_name.write(line.replace(os.path.basename(bam_file), fastqc_clean_name))
+                    shutil.move(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), os.path.join(fastqc_out, 'fastqc_data.txt'))
                     shutil.move(tx_combo_file, sentry_file)
                     if os.path.exists("%s.zip" % tx_fastqc_out):
                         shutil.move("%s.zip" % tx_fastqc_out, os.path.join(fastqc_out, "%s.zip" % fastqc_clean_name))
@@ -576,7 +583,7 @@ def _run_qualimap(bam_file, data, out_dir):
                                              num_cores)
         cmd = ("unset DISPLAY && {qualimap} bamqc -bam {bam_file} -outdir {out_dir} "
                "-nt {num_cores} --java-mem-size={max_mem}")
-        species = data["genome_resources"]["aliases"].get("ensembl", "").upper()
+        species = tz.get_in(("genome_resources", "aliases", "ensembl"), data, "")
         if species in ["HUMAN", "MOUSE"]:
             cmd += " -gd {species}"
         regions = bedutils.merge_overlaps(dd.get_variant_regions(data), data)
@@ -594,22 +601,25 @@ def _parse_metrics(metrics):
 
     missing = set(["Genes Detected", "Transcripts Detected",
                    "Mean Per Base Cov."])
-    correct = set(["Intergenic pct", "Intronic pct", "Exonic pct"])
+    correct = set(["rRNA", "rRNA_rate"])
+    percentages = set(["Intergenic pct", "Intronic pct", "Exonic pct"])
     to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
-                      "Intronic pct": "Intronic Rate", "Exonic pct": "Exonic Rate",
-                      "Not aligned": 0, 'Aligned to genes': 0, 'Non-unique alignment': 0,
-                      "No feature assigned": 0, "Duplication Rate of Mapped": 1,
-                      "Fragment Length Mean": 1,
-                      "rRNA": 1, "Ambiguou alignment": 0})
+                      "Intronic pct": "Intronic Rate",
+                      "Exonic pct": "Exonic Rate",
+                      "Not aligned": 0, 'Aligned to genes': 0,
+                      'Non-unique alignment': 0, "No feature assigned": 0,
+                      "Duplication Rate of Mapped": 1, "Fragment Length Mean": 1,
+                      "Ambiguou alignment": 0})
     total = ["Not aligned", "Aligned to genes", "No feature assigned"]
 
     out = {}
     total_reads = sum([int(metrics[name]) for name in total])
-    out['rRNA rate'] = 1.0 * int(metrics["rRNA"]) / total_reads
     out['Mapped'] = sum([int(metrics[name]) for name in total[1:]])
     out['Mapping Rate'] = 1.0 * int(out['Mapped']) / total_reads
     [out.update({name: 0}) for name in missing]
-    [metrics.update({name: 1.0 * float(metrics[name]) / 100}) for name in correct]
+    out.update({key: val for key, val in metrics.iteritems() if key in correct})
+    [metrics.update({name: 1.0 * float(metrics[name]) / 100}) for name in
+     percentages]
 
     for name in to_change:
         if not to_change[name]:
@@ -660,41 +670,17 @@ def _transform_browser_coor(rRNA_interval, rRNA_coor):
                 if bio.startswith("rRNA"):
                     out_handle.write(("{0}:{1}-{2}\n").format(c, s, e))
 
-def _detect_rRNA(config, bam_file, rRNA_file, ref_file, out_dir, single_end):
-    """
-    Calculate rRNA with gatk-framework
-    """
-    if not utils.file_exists(rRNA_file):
-        return {'rRNA': 0}
-    out_file = os.path.join(out_dir, "rRNA.counts")
-    if not utils.file_exists(out_file):
-        out_file = _count_rRNA_reads(bam_file, out_file, ref_file, rRNA_file, single_end, config)
-    with open(out_file) as in_handle:
-        for line in in_handle:
-            if line.find("CountReads counted") > -1:
-                rRNA_reads = line.split()[6]
-                break
-    return {'rRNA': rRNA_reads}
-
-def _count_rRNA_reads(in_bam, out_file, ref_file, rRNA_interval, single_end, config):
-    """Use GATK counter to count reads in rRNA genes
-    """
-    bam.index(in_bam, config)
-    if not utils.file_exists(out_file):
-        with file_transaction(out_file) as tx_out_file:
-            rRNA_coor = os.path.join(os.path.dirname(out_file), "rRNA.list")
-            _transform_browser_coor(rRNA_interval, rRNA_coor)
-            params = ["-T", "CountReads",
-                      "-R", ref_file,
-                      "-I", in_bam,
-                      "-log", tx_out_file,
-                      "-L", rRNA_coor,
-                      "--filter_reads_with_N_cigar",
-                      "-allowPotentiallyMisencodedQuals"]
-            jvm_opts = broad.get_gatk_framework_opts(config)
-            cmd = [config_utils.get_program("gatk-framework", config)] + jvm_opts + params
-            do.run(cmd, "counts rRNA for %s" % in_bam)
-        return out_file
+def _detect_rRNA(data):
+    gtf_file = dd.get_gtf_file(data)
+    count_file = dd.get_count_file(data)
+    rrna_features = gtf.get_rRNA(gtf_file)
+    genes = [x[0] for x in rrna_features if x]
+    if not genes:
+        return {'rRNA': "NA", "rRNA_rate": "NA"}
+    count_table = pd.read_csv(count_file, sep="\t", names=["id", "counts"])
+    rrna = sum(count_table[count_table["id"].isin(genes)]["counts"])
+    rrna_rate = float(rrna) / sum(count_table["counts"])
+    return {'rRNA': str(rrna), 'rRNA_rate': str(rrna_rate)}
 
 def _parse_qualimap_rnaseq(table):
     """
@@ -739,7 +725,7 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
         do.run(cmd, "Qualimap for {}".format(data["name"][-1]))
     metrics = _parse_rnaseq_qualimap_metrics(report_file)
     metrics.update(_detect_duplicates(bam_file, out_dir, data))
-    metrics.update(_detect_rRNA(config, bam_file, gtf_file, ref_file, out_dir, single_end))
+    metrics.update(_detect_rRNA(data))
     metrics.update({"Fragment Length Mean": bam.estimate_fragment_size(bam_file)})
     metrics = _parse_metrics(metrics)
     return metrics
@@ -1081,7 +1067,8 @@ def _get_coverage_per_region(name):
     if utils.file_exists(fn):
         try:
             dt = pd.read_csv(fn, sep="\t", index_col=False)
-            return "%.3f" % (sum(map(float, dt['meanCoverage'])) / len(dt['meanCoverage']))
+            if len(dt["meanCoverage"]) > 0:
+                return "%.3f" % (sum(map(float, dt['meanCoverage'])) / len(dt['meanCoverage']))
         except TypeError:
             logger.debug("%s has no lines in coverage.bed" % name)
     return "NA"
@@ -1096,6 +1083,8 @@ def _merge_metrics(samples):
     with file_transaction(out_file) as out_tx:
         for s in samples:
             s = s[0]
+            if s['description'] in cov:
+                continue
             m = tz.get_in(['summary', 'metrics'], s)
             if m:
                 for me in m:
@@ -1122,13 +1111,18 @@ def _merge_fastqc(data):
     merge all fastqc samples into one by module
     """
     fastqc_list = defaultdict(list)
+    seen = set()
     for sample in data:
         name = dd.get_sample_name(sample[0])
+        if name in seen:
+            continue
+        seen.add(name)
         fns = glob.glob(os.path.join(dd.get_work_dir(sample[0]), "qc", dd.get_sample_name(sample[0]), "fastqc") + "/*")
         for fn in fns:
             if fn.endswith("tsv"):
                 metric = os.path.basename(fn)
                 fastqc_list[metric].append([name, fn])
+
     for metric in fastqc_list:
         dt_by_sample = []
         for fn in fastqc_list[metric]:

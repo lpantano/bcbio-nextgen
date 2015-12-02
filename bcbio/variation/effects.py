@@ -8,6 +8,7 @@ from distutils.version import LooseVersion
 import os
 import glob
 import shutil
+import subprocess
 import string
 
 import toolz as tz
@@ -91,13 +92,21 @@ def prep_vep_cache(dbkey, ref_file, tooldir=None, config=None):
                 os.path.dirname(os.path.dirname(ref_file)), "vep")))
             out_dir = os.path.join(vep_dir, species, vepv)
             if not os.path.exists(out_dir):
+                tmp_dir = utils.safe_makedir(os.path.join(vep_dir, species, "txtmp"))
+                eversion = vepv.split("_")[0]
+                url = "ftp://ftp.ensembl.org/pub/release-%s/variation/VEP/%s.tar.gz" % (eversion, ensembl_name)
+                with utils.chdir(tmp_dir):
+                    subprocess.check_call(["wget", "--no-check-certificate", "-c", url])
                 vep_path = "%s/bin/" % tooldir if tooldir else ""
                 cmd = ["%svep_install.pl" % vep_path, "-a", "c", "-s", ensembl_name,
-                       "-c", vep_dir]
+                       "-c", vep_dir, "-u", tmp_dir]
                 do.run(cmd, "Prepare VEP directory for %s" % ensembl_name)
                 cmd = ["%svep_convert_cache.pl" % vep_path, "-species", species, "-version", vepv,
                        "-d", vep_dir]
                 do.run(cmd, "Convert VEP cache to tabix %s" % ensembl_name)
+                for tmp_fname in os.listdir(tmp_dir):
+                    os.remove(os.path.join(tmp_dir, tmp_fname))
+                os.rmdir(tmp_dir)
             tmp_dir = os.path.join(vep_dir, "tmp")
             if os.path.exists(tmp_dir):
                 shutil.rmtree(tmp_dir)
@@ -119,19 +128,27 @@ def run_vep(in_file, data):
                 cores = tz.get_in(("config", "algorithm", "num_cores"), data, 1)
                 fork_args = ["--fork", str(cores)] if cores > 1 else []
                 vep = config_utils.get_program("variant_effect_predictor.pl", data["config"])
-                dbnsfp_args, dbnsfp_fields = _get_dbnsfp(data)
-                loftee_args, loftee_fields = _get_loftee(data)
+                is_human = tz.get_in(["genome_resources", "aliases", "human"], data, False)
+                if is_human:
+                    dbnsfp_args, dbnsfp_fields = _get_dbnsfp(data)
+                    loftee_args, loftee_fields = _get_loftee(data)
+                    prediction_args = ["--sift", "b", "--polyphen", "b"]
+                    prediction_fields = ["PolyPhen", "SIFT"]
+                else:
+                    dbnsfp_args, dbnsfp_fields = [], []
+                    loftee_args, loftee_fields = [], []
+                    prediction_args, prediction_fields = [], []
                 std_fields = ["Consequence", "Codons", "Amino_acids", "Gene", "SYMBOL", "Feature",
-                              "EXON", "PolyPhen", "SIFT", "Protein_position", "BIOTYPE", "CANONICAL", "CCDS"]
+                              "EXON"] + prediction_fields + ["Protein_position", "BIOTYPE", "CANONICAL", "CCDS"]
                 resources = config_utils.get_resources("vep", data["config"])
                 extra_args = [str(x) for x in resources.get("options", [])]
                 cmd = [vep, "--vcf", "-o", "stdout", "-i", in_file] + fork_args + extra_args + \
                       ["--species", ensembl_name,
                        "--no_stats",
                        "--cache", "--offline", "--dir", vep_dir,
-                       "--sift", "b", "--polyphen", "b", "--symbol", "--numbers", "--biotype", "--total_length",
-                       "--canonical", "--ccds",
-                       "--fields", ",".join(std_fields + dbnsfp_fields + loftee_fields)] + dbnsfp_args + loftee_args
+                       "--symbol", "--numbers", "--biotype", "--total_length", "--canonical", "--ccds",
+                       "--fields", ",".join(std_fields + dbnsfp_fields + loftee_fields)] + \
+                       prediction_args + dbnsfp_args + loftee_args
 
                 if tz.get_in(("config", "algorithm", "clinical_reporting"), data, False):
 

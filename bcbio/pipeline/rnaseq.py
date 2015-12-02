@@ -1,7 +1,9 @@
 import os
+import sys
 from bcbio.rnaseq import (featureCounts, cufflinks, oncofuse, count, dexseq,
                           express, variation, stringtie, sailfish)
 from bcbio.ngsalign import bowtie2, alignprep
+from bcbio.variation import vardict
 import bcbio.pipeline.datadict as dd
 from bcbio.utils import filter_missing
 from bcbio.log import logger
@@ -16,13 +18,24 @@ def rnaseq_variant_calling(samples, run_parallel):
 
 def run_rnaseq_variant_calling(data):
     variantcaller = dd.get_variantcaller(data)
+    if isinstance(variantcaller, list) and len(variantcaller) > 1:
+        logger.error("Only one variantcaller can be run for RNA-seq at "
+                     "this time. Post an issue here "
+                     "(https://github.com/chapmanb/bcbio-nextgen/issues) "
+                     "if this is something you need to do.")
+        sys.exit(1)
+
     if variantcaller and "gatk" in variantcaller:
         data = variation.rnaseq_gatk_variant_calling(data)
+    if vardict.get_vardict_command(data):
+        data = variation.rnaseq_vardict_variant_calling(data)
     return [[data]]
 
 def run_rnaseq_joint_genotyping(*samples):
     data = samples[0][0]
     variantcaller = dd.get_variantcaller(data)
+    if "gatk" not in variantcaller:
+        return samples
     ref_file = dd.get_ref_file(data)
     out_file = os.path.join(dd.get_work_dir(data, "."), "variation", "combined.vcf")
     if variantcaller and "gatk" in variantcaller:
@@ -40,12 +53,12 @@ def quantitate_expression_parallel(samples, run_parallel):
     quantitate expression, all programs run here should be multithreaded to
     take advantage of the threaded run_parallel environment
     """
-    samples = run_parallel("generate_transcript_counts", samples)
-    samples = run_parallel("run_cufflinks", samples)
     data = samples[0][0]
-    if "sailfish" in dd.get_expression_caller(data):
-        samples = run_parallel("run_sailfish", samples)
-        samples = sailfish.combine_sailfish(samples)
+    samples = run_parallel("generate_transcript_counts", samples)
+    samples = run_parallel("run_sailfish", samples)
+    samples = sailfish.combine_sailfish(samples)
+    if "cufflinks" in dd.get_expression_caller(data):
+        samples = run_parallel("run_cufflinks", samples)
     #samples = run_parallel("run_stringtie_expression", samples)
     return samples
 
@@ -54,7 +67,8 @@ def quantitate_expression_noparallel(samples, run_parallel):
     run transcript quantitation for algorithms that don't run in parallel
     """
     data = samples[0][0]
-    samples = run_parallel("run_express", samples)
+    if "express" in dd.get_expression_caller(data):
+        samples = run_parallel("run_express", samples)
     samples = run_parallel("run_dexseq", samples)
     return samples
 
@@ -181,6 +195,8 @@ def combine_files(samples):
     all samples
     """
     gtf_file = dd.get_gtf_file(samples[0][0], None)
+    dexseq_gff = dd.get_dexseq_gff(samples[0][0])
+
     # combine featureCount files
     count_files = filter_missing([dd.get_count_file(x[0]) for x in samples])
     combined = count.combine_count_files(count_files, ext=".counts")
@@ -210,6 +226,7 @@ def combine_files(samples):
     if to_combine_dexseq:
         dexseq_combined = count.combine_count_files(to_combine_dexseq,
                                                     dexseq_combined_file, ".dexseq")
+        dexseq.create_dexseq_annotation(dexseq_gff, dexseq_combined)
     else:
         dexseq_combined = None
     updated_samples = []
