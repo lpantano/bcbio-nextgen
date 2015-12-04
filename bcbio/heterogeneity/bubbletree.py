@@ -32,7 +32,7 @@ def run(vrn_info, calls_by_name, somatic_info):
                              work_dir, calls_by_name, somatic_info)
     cnv_csv = _prep_cnv_file(cnv_info["cns"], cnv_info["variantcaller"], calls_by_name, work_dir,
                              somatic_info.tumor_data)
-    _run_bubbletree(vcf_csv, cnv_csv, somatic_info.tumor_data, somatic_info.normal_bam is not None)
+    return _run_bubbletree(vcf_csv, cnv_csv, somatic_info.tumor_data, somatic_info.normal_bam is not None)
 
 def _run_bubbletree(vcf_csv, cnv_csv, data, has_normal=True):
     """Create R script and run on input data
@@ -46,11 +46,10 @@ def _run_bubbletree(vcf_csv, cnv_csv, data, has_normal=True):
     calls_out = "%s-calls.rds" % base
     freqs_out = "%s-bubbletree_prevalence.txt" % base
     sample = dd.get_sample_name(data)
-    # BubbleTree has some internal hardcoded paramters that assume
-    # a smaller distribution of log2 scores. This is not true for
-    # tumor-only calls, so we scale the calculations to actually
-    # get calls. Need to better long term solution with flexible
-    # parameters.
+    # BubbleTree has some internal hardcoded paramters that assume a smaller
+    # distribution of log2 scores. This is not true for tumor-only calls and
+    # normal contamination, so we scale the calculations to actually get calls.
+    # Need a better long term solution with flexible parameters.
     lrr_scale = 1.0 if has_normal else 10.0
     with open(r_file, "w") as out_handle:
         out_handle.write(_script.format(**locals()))
@@ -64,6 +63,9 @@ def _run_bubbletree(vcf_csv, cnv_csv, data, has_normal=True):
             else:
                 logger.exception()
                 raise
+    return {"caller": "bubbletree",
+            "report": freqs_out,
+            "plots": {"bubble": bubbleplot_out, "track": trackplot_out}}
 
 def _allowed_bubbletree_errorstates(msg):
     allowed = ["Error in p[i, ] : subscript out of bounds",
