@@ -25,20 +25,24 @@ def region_to_gatk(region):
 def _gatk_extract_reads_cl(data, region, prep_params, tmp_dir):
     """Use GATK to extract reads from full BAM file, recalibrating if configured.
     """
+    requires_gatkfull = False
     args = ["-T", "PrintReads",
             "-L", region_to_gatk(region),
             "-R", data["sam_ref"],
             "-I", data["work_bam"]]
-    if prep_params.get("max_depth"):
-        args += ["--downsample_to_coverage", str(prep_params["max_depth"])]
     if prep_params["recal"] == "gatk":
         if "prep_recal" in data and _recal_has_reads(data["prep_recal"]):
+            requires_gatkfull = True
             args += ["-BQSR", data["prep_recal"]]
     elif prep_params["recal"]:
         raise NotImplementedError("Recalibration method %s" % prep_params["recal"])
-    jvm_opts = broad.get_gatk_framework_opts(data["config"],
-                                             memscale={"direction": "decrease", "magnitude": 3})
-    return [config_utils.get_program("gatk-framework", data["config"])] + jvm_opts + args
+    memscale = {"direction": "decrease", "magnitude": 3}
+    if requires_gatkfull:
+        runner = broad.runner_from_config(data["config"])
+        return runner.cl_gatk(args, tmp_dir, memscale=memscale)
+    else:
+        jvm_opts = broad.get_gatk_framework_opts(data["config"], memscale=memscale)
+        return [config_utils.get_program("gatk-framework", data["config"])] + jvm_opts + args
 
 def _recal_has_reads(in_file):
     with open(in_file) as in_handle:
@@ -49,7 +53,6 @@ def _piped_input_cl(data, region, tmp_dir, out_base_file, prep_params):
     """
     cl = _gatk_extract_reads_cl(data, region, prep_params, tmp_dir)
     sel_file = data["work_bam"]
-    bam.index(sel_file, data["config"])
     return sel_file, " ".join(cl)
 
 def _piped_realign_gatk(data, region, cl, out_base_file, tmp_dir, prep_params):
@@ -109,9 +112,7 @@ def _get_prep_params(data):
     recal_param = "gatk" if recal_param is True else recal_param
     realign_param = algorithm.get("realign", True)
     realign_param = "gatk" if realign_param is True else realign_param
-    max_depth = algorithm.get("coverage_depth_max", 10000)
-    return {"recal": recal_param, "realign": realign_param,
-            "max_depth": max_depth}
+    return {"recal": recal_param, "realign": realign_param}
 
 def _need_prep(data):
     prep_params = _get_prep_params(data)

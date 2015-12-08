@@ -37,6 +37,8 @@ def setup_args(parser):
                                           "noalign-variant, illumina-rnaseq, illumina-chipseq"))
     parser.add_argument("metadata", help="CSV file with project metadata. Name of file used as project name.")
     parser.add_argument("input_files", nargs="*", help="Input read files, in BAM or fastq format")
+    parser.add_argument("--only-metadata", help="Ignore samples not present in metadata CSV file",
+                        action="store_true", default=False)
     return parser
 
 # ## Prepare sequence data inputs
@@ -67,7 +69,10 @@ def _prep_fastq_input(fs, base):
 KNOWN_EXTS = {".bam": "bam", ".cram": "bam", ".fq": "fastq",
               ".fastq": "fastq", ".txt": "fastq",
               ".fastq.gz": "fastq", ".fq.gz": "fastq",
-              ".txt.gz": "fastq", ".gz": "fastq"}
+              ".txt.gz": "fastq", ".gz": "fastq",
+              ".fastq.bz2": "fastq", ".fq.bz2": "fastq",
+              ".txt.bz2": "fastq", ".bz2": "fastq"}
+
 
 def _prep_items_from_base(base, in_files):
     """Prepare a set of configuration items for input files.
@@ -188,7 +193,6 @@ def _set_global_vars(metadata):
     fnames = collections.defaultdict(list)
     for sample in metadata.keys():
         for k, v in metadata[sample].items():
-            print k, v
             if isinstance(v, basestring) and os.path.isfile(v):
                 v = _expand_file(v)
                 metadata[sample][k] = v
@@ -246,21 +250,25 @@ def _strip_and_convert_lists(field):
 def _pname_and_metadata(in_file):
     """Retrieve metadata and project name from the input metadata CSV file.
 
-    Uses the input file name for the project name and
-
-    For back compatibility, accepts the project name as an input, providing no metadata.
+    Uses the input file name for the project name and for back compatibility,
+    accepts the project name as an input, providing no metadata.
     """
     if os.path.isfile(in_file):
         with open(in_file) as in_handle:
             md, global_vars = _parse_metadata(in_handle)
         base = os.path.splitext(os.path.basename(in_file))[0]
+        md_file = in_file
     elif objectstore.is_remote(in_file):
         with objectstore.open(in_file) as in_handle:
             md, global_vars = _parse_metadata(in_handle)
         base = os.path.splitext(os.path.basename(in_file))[0]
+        md_file = None
     else:
-        base, md, global_vars = _safe_name(in_file), {}, {}
-    return _safe_name(base), md, global_vars
+        if in_file.endswith(".csv"):
+            raise ValueError("Did not find input metadata file: %s" % in_file)
+        base, md, global_vars = _safe_name(os.path.splitext(os.path.basename(in_file))[0]), {}, {}
+        md_file = None
+    return _safe_name(base), md, global_vars, md_file
 
 def _handle_special_yaml_cases(v):
     """Handle values that pass integer, boolean or list values.
@@ -309,7 +317,7 @@ def _add_ped_metadata(name, metadata):
                 break
     return metadata
 
-def _add_metadata(item, metadata, remotes):
+def _add_metadata(item, metadata, remotes, only_metadata=False):
     """Add metadata information from CSV file to current item.
 
     Retrieves metadata based on 'description' parsed from input CSV file.
@@ -325,24 +333,28 @@ def _add_metadata(item, metadata, remotes):
     if remotes.get("region"):
         item["algorithm"]["variant_regions"] = remotes["region"]
     TOP_LEVEL = set(["description", "genome_build", "lane", "vrn_files", "files", "analysis"])
+    keep_sample = True
     if len(item_md) > 0:
         if "metadata" not in item:
             item["metadata"] = {}
         for k, v in item_md.iteritems():
             if v:
-                v = _handle_special_yaml_cases(v)
                 if k in TOP_LEVEL:
                     item[k] = v
                 elif k in run_info.ALGORITHM_KEYS:
+                    v = _handle_special_yaml_cases(v)
                     item["algorithm"][k] = v
                 else:
+                    v = _handle_special_yaml_cases(v)
                     item["metadata"][k] = v
     elif len(metadata) > 0:
-        print "Metadata not found for sample %s, %s" % (item["description"],
-                                                        os.path.basename(item["files"][0]))
+        warn = "Dropped sample" if only_metadata else "Added minimal sample information"
+        print "WARNING: %s: metadata not found for %s, %s" % (warn, item["description"],
+                                                              os.path.basename(item["files"][0]))
+        keep_sample = not only_metadata
     if tz.get_in(["metadata", "ped"], item):
         item["metadata"] = _add_ped_metadata(item["description"], item["metadata"])
-    return item
+    return item if keep_sample else None
 
 def _retrieve_remote(fnames):
     """Retrieve remote inputs found in the same bucket as the template or metadata files.
@@ -376,18 +388,22 @@ def _convert_to_relpaths(data, work_dir):
 def setup(args):
     template, template_txt = name_to_config(args.template)
     base_item = template["details"][0]
-    project_name, metadata, global_vars = _pname_and_metadata(args.metadata)
+    project_name, metadata, global_vars, md_file = _pname_and_metadata(args.metadata)
     remotes = _retrieve_remote([args.metadata, args.template])
     inputs = args.input_files + remotes.get("inputs", [])
-    items = [_add_metadata(item, metadata, remotes)
-             for item in _prep_items_from_base(base_item, inputs)]
+    raw_items = [_add_metadata(item, metadata, remotes, args.only_metadata)
+                 for item in _prep_items_from_base(base_item, inputs)]
+    items = [x for x in raw_items if x]
 
     out_dir = os.path.join(os.getcwd(), project_name)
     work_dir = utils.safe_makedir(os.path.join(out_dir, "work"))
     if hasattr(args, "relpaths") and args.relpaths:
         items = [_convert_to_relpaths(x, work_dir) for x in items]
+    out_config_file = _write_template_config(template_txt, project_name, out_dir)
+    if md_file:
+        shutil.copyfile(md_file, os.path.join(out_dir, "config", os.path.basename(md_file)))
     if len(items) == 0:
-        out_config_file = _write_template_config(template_txt, project_name, out_dir)
+        print
         print "Template configuration file created at: %s" % out_config_file
         print "Edit to finalize custom options, then prepare full sample config with:"
         print "  bcbio_nextgen.py -w template %s %s sample1.bam sample2.fq" % \
@@ -395,6 +411,7 @@ def setup(args):
     else:
         out_config_file = _write_config_file(items, global_vars, template, project_name, out_dir,
                                              remotes)
+        print
         print "Configuration file created at: %s" % out_config_file
         print "Edit to finalize and run with:"
         print "  cd %s" % work_dir

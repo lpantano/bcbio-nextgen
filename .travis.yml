@@ -1,0 +1,34 @@
+sudo: required
+dist: trusty
+
+language: generic
+
+env:
+  - BCBIO_DOCKER_PRIVILEGED=True
+
+before_install:
+  # Temporal fix for networking problem: https://github.com/travis-ci/travis-ci/issues/1484
+  - echo "127.0.1.1 "`hostname` | sudo tee /etc/hosts
+  # Get and install anaconda for custom Python installation
+  - wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh
+  - bash Miniconda-latest-Linux-x86_64.sh -b -p ~/install/bcbio-vm/anaconda
+
+install:
+  # Install bcbio-nextgen and bcbio-nextgen-vm
+  - export PATH=~/install/bcbio-vm/anaconda/bin/:$PATH
+  - conda install --yes -c bcbio bcbio-nextgen-vm -q
+  # Get docker container
+  - bcbio_vm.py --datadir=${TRAVIS_BUILD_DIR}/tests/data install --tools
+  # Update to bcbio-nextgen latest code within the container
+  - bcbio_vm.py devel setup_install
+  - pip install cwl_runner
+
+script:
+  - cd tests
+  - bash run_tests.sh docker
+  - bash run_tests.sh docker_ipython
+
+notifications:
+    email: false
+    slack:
+        secure: LztOFaO6HFB2Pu+zMOhB42MUMdP+AwjHr2l3fDZtQk8uMsKZ/XcpDhnGJii39VbkPUyN5yT2r42hJzL/s+2MX6g8zS3wsYh7lJN9XC7483tmzlO66yo/OTQ3xC9r0TmR/O3whDEKVj+kroOc7MMltLNwIyEIpFXe5Od8WFrd2Sg=

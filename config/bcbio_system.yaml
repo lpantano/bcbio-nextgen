@@ -7,8 +7,10 @@
 
 # Define resources to be used for individual programs on multicore machines.
 # These can be defined specifically for memory and processor availability.
-# - memory: Specify usage for memory intensive programs
-# - cores: Define cores that can be used for multicore programs.
+# - memory: Specify usage for memory intensive programs. The indicated value
+#           specifies the wanted *per core* usage.
+# - cores: Define cores that can be used for multicore programs. The indicated
+#          value is the maximum cores that should be allocated for a program.
 # - jvm_opts: specify details
 # - cmd: Command to launch the program, if not located on PATH.
 # - dir: Directory containing program associated data. Especially useful for
@@ -32,6 +34,9 @@ resources:
   samtools:
     memory: 2G
     cores: 16
+  hisat2:
+    memory: 2G
+    cores: 16
   star:
     memory: 2g
     cores: 16
@@ -39,8 +44,8 @@ resources:
     cores: 16
     memory: 4G
   kraken:
-    cores: 6
-    memory: 4g
+    cores: 4
+    memory: 2g
   qsignature:
     cores: 1
     memory: 2g
@@ -69,6 +74,8 @@ resources:
   mutect:
     jvm_opts: ["-Xms750m", "-Xmx2500m"]
     dir: /usr/local/share/java/mutect
+  miraligner:
+    jvm_opts: ["-Xms750m", "-Xmx4500m"]
   varscan:
     jvm_opts: ["-Xms750m", "-Xmx2000m"]
     dir: /usr/local/share/java/varscan
@@ -79,6 +86,12 @@ resources:
     dir: /usr/local/share/java/oncofuse
   express:
     memory: 8g
+  dexseq:
+    memory: 10g
+  seqcluster:
+    memory: 8g
+  wham:
+    memory: 3500m
 
 # Location of galaxy configuration file, which has pointers to reference data
 # https://bcbio-nextgen.readthedocs.org/en/latest/contents/configuration.html#reference-genome-files

@@ -15,31 +15,37 @@ and RNA-seq analysis, bundled into an isolated directory or virtual environment:
 bcbio should install cleanly on most Linux systems. For Mac OSX, we suggest
 trying `bcbio-vm <https://github.com/chapmanb/bcbio-nextgen-vm>`_ which runs
 bcbio on :ref:`docs-cloud` or isolates all the third party tools inside a
-Docker container.
+Docker container. bcbio-vm is still a work in progress but not all of the
+dependencies bcbio uses install cleanly on OSX.
 
-It places genomes, indexes and associated data files in
+With the command line above, indexes and associated data files go in
 ``/usr/local/share/bcbio-nextgen`` and tools in ``/usr/local``. You should edit
 the pre-created system configuration file in
-``/usr/local/share/bcbio-nextgen/galaxy/bcbio_system.yaml``
-to match your local system or cluster configuration.
+``/usr/local/share/bcbio-nextgen/galaxy/bcbio_system.yaml`` to match your local
+system or cluster configuration. If you don't have write permissions to install
+into the ``/usr/local`` directories you can install elsewhere or use ``sudo
+chmod`` to give your standard user permissions. Please don't run the installer
+as the root user.
 
 The installation is highly customizable, and you can install
 additional software and data later using ``bcbio_nextgen.py upgrade``.
 Run ``python bcbio_nextgen_install.py`` with no arguments to see options
 for configuring the installation process. Some useful arguments are:
 
-- ``--sudo`` Enable installation in privileged directories and allow the
-  installer to update system packages.
 - ``--isolate`` Avoid updating the user's ``~/.bashrc`` if installing in a
   non-standard PATH. This facilitates creation of isolated modules
   without disrupting the user's environmental setup.
 - ``--nodata`` Do not install genome data.
+- ``--sudo`` Enable installation in privileged directories and allow the
+  installer to update system packages. We recommend avoiding this
+  option unless inside a Docker container, cloud instance or virtual machine.
 
 To bootstrap installation, the machine will need to have some basic
 requirements:
 
-- Python 2.6 or 2.7, with the development libraries
-  installed (the python-dev or python-devel packages).
+- Python 2.7, Python 3.x or Python 2.6 plus the argparse dependency
+  with the development libraries installed (the python-dev or python-devel
+  packages).
 - Compilers: Recent versions of gcc, g++ and gfortran. gcc 4.8.x
   is well tested, although other versions should work.
 - The git version control system (http://git-scm.com/).
@@ -47,11 +53,10 @@ requirements:
 - unzip
 - zlib (with development libraries)
 
-If you're not using the ``--sudo`` option, please see :ref:`isolated-install`
-for additional system requirements needed to bootstrap the full system on
-minimal machines. The
-`bcbio-nextgen Dockerfile <https://github.com/chapmanb/bcbio-nextgen/blob/master/Dockerfile#L5>`_
-contains bootstrap package information to install on bare Ubuntu systems.
+Please see :ref:`isolated-install` for additional system requirements needed to
+bootstrap the full system on minimal machines. The `bcbio-nextgen Dockerfile
+<https://github.com/chapmanb/bcbio-nextgen/blob/master/Dockerfile#L5>`_ contains
+bootstrap package information to install on bare Ubuntu systems.
 
 The automated installer creates a fully integrated environment that
 allows simultaneous updates of the framework, third party tools and
@@ -81,19 +86,13 @@ This requires the following additional system requirements to be in place:
 - Ruby (including libraries and irb. On recent CentOS and other rpm systems
   these are separate packages:
   ``ruby-libs`` and ``ruby-irb``)
-- R with Rscript. We test libraries with the most recent R releases as most of
-  the Bioconductor tools track this version. If installing from system packages,
-  also install the development packages. Some packages used by bcbio require R >
-  3.0.3. On Ubuntu or other deb systems you should get the latest R version from
-  the CRAN repository by updating your apt sources
-  (http://cran.r-project.org/bin/linux/ubuntu/README) and installing ``r-base r-base-dev``.
-  On RedHat or other rpm systems install ``R-core R-core-devel R-java libRmath libRmath-devel``.
 - Perl with development libraries (On Ubuntu or other deb systems:
-  ``perl, libperl-devel`` On RedHat or other rpm systems:
+  ``perl, libperl-dev`` On RedHat or other rpm systems:
   ``perl perl-devel perl-core``)
 - bzip2 (with development libraries)
-- curl (with development libraries; On Ubuntu: ``libcurl4-openssl-dev``, On
-  RedHat: ``libcurl4-openssl-dev``)
+- curl and SSL (with development libraries; On Ubuntu: ``libssl-dev libcurl4-openssl-dev``, On
+  RedHat: ``openssl-devel libcurl-devel``). Building R and git on older systems requires a relatively
+  recent version of curl (newer than v7.28).
 - XML development libraries (On Ubuntu: ``libxml2-dev``, on RedHat: ``libxml2-devel``)
 - curses with development libraries (On Ubuntu: ``libncurses5-dev``, on RedHat ``ncurses-devel``)
 
@@ -103,8 +102,6 @@ access to the executables, system libraries and Perl libraries update
 your `~/.bashrc` with::
 
     export PATH=/path_to_bcbio/bin:$PATH
-    export LD_LIBRARY_PATH=/path_to_bcbio/lib:$LD_LIBRARY_PATH
-    export PERL5LIB=/path_to_bcbio/lib/perl5:/path_to_bcbio/perl5/site_perl:${PERL5LIB}
 
 This installation process is not easily re-locatable due to absolute
 filesystem pointers within the installation directory. We plan to move
@@ -112,6 +109,43 @@ towards utilizing `Docker`_ containers to provide a fully isolated software
 installation.
 
 .. _Docker: http://www.docker.io/
+
+
+.. _private-install:
+
+local/private bcbio installation
+================================
+
+This is for if you have a previously installed version of bcbio-nextgen and you
+want to make changes to the code and test them without disrupting your
+installation.
+
+Install `Miniconda`_::
+
+  wget https://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh
+  bash Miniconda-latest-Linux-x86_64.sh
+
+With Miniconda installed create a (private) conda environment to be used for
+this bcbio installation::
+
+  conda create -n bcbio pip distribute
+
+The environment can then be switched on with `source activate bcbio` and off
+with `source deactivate`. Activate the environment and install bcbio within it::
+
+  source activate bcbio
+  conda install -c bcbio bcbio-nextgen # This will install dependencies
+  git clone https://github.com/chapmanb/bcbio-nextgen.git
+  cd bcbio-nextgen
+  python setup.py install
+
+If you want to use a different (e.g., system-wide) bcbio installation for
+genomes, indices and the various tools point to that
+installation's `bcbio_system.yaml`, for example::
+
+  bcbio_nextgen.py /path-to-your-system-wide/bcbio_system.yaml ../config/NA12878-exome-methodcmp.yaml -n 16 ...
+
+.. _Miniconda: http://conda.pydata.org/miniconda.html
 
 .. _upgrade-install:
 
@@ -183,7 +217,7 @@ Extra software and data
 =======================
 
 We're not able to automatically install some useful tools due to licensing
-restrictions, so provide a mechanism to manually download and add these to
+restrictions, so we provide a mechanism to manually download and add these to
 bcbio-nextgen during an upgrade with the ``--toolplus`` command line. This also
 includes mechanisms to add in large annotation files not included by default.
 
@@ -247,10 +281,59 @@ for commercial usage.
 .. _VEP: http://www.ensembl.org/info/docs/tools/vep/index.html
 .. _GATK download: http://www.broadinstitute.org/gatk/download
 .. _a distribution of GATK for commercial users: http://www.appistry.com/gatk
-.. _FreeBayes and GATK comparison: http://bcbio.wordpress.com/2013/10/21/updated-comparison-of-variant-detection-methods-ensemble-freebayes-and-minimal-bam-preparation-pipelines/
+.. _FreeBayes and GATK comparison: http://bcb.io/2013/10/21/updated-comparison-of-variant-detection-methods-ensemble-freebayes-and-minimal-bam-preparation-pipelines/
+
+kraken
+~~~~~~
+
+``-- toolplus`` is also used to install data rich supplemental software which is
+not installed by default such as kraken database::
+
+    bcbio_nextgen.py upgrade --tools --toolplus kraken
+
+
 
 Troubleshooting
 ===============
+
+Proxy or firewall problems
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Some steps retrieve third party tools from GitHub, which can run into
+issues if you're behind a proxy or block git ports. To instruct git to
+use ``https://`` globally instead of ``git://``::
+
+    $ git config --global url.https://github.com/.insteadOf git://github.com/
+
+GATK or Java Errors
+~~~~~~~~~~~~~~~~~~~
+GATK and other software tools used by bcbio currently require Java 1.7. If you
+have a different version, you'll see errors like::
+
+    Unsupported major.minor version 51.0
+
+To fix this make sure you have Java 1.7 first in your ``PATH`` and that
+``JAVA_HOME`` is either set to point to the same version, or not set.
+(``unset JAVA_HOME``).
+
+ImportErrors
+~~~~~~~~~~~~
+Import errors with tracebacks containing Python libraries outside of the bcbio
+distribution (``/path/to/bcbio/anaconda``) are often due to other conflicting
+Python installations. bcbio tries to isolate itself as much as possible but
+external libraries can get included during installation due to the
+PYTHONHOME or PYTHONPATH environmental variables or local site libraries.
+These commands will temporary unset those to get bcbio installed, after which it
+should ignore them automatically::
+
+    $ unset PYTHONHOME
+    $ unset PYTHONPATH
+    $ export PYTHONNOUSERSITE=1
+
+Finally, having a ``.pydistutils.cfg`` file in your home directory can mess with
+where the libraries get installed. If you have this file in your
+home directory, temporarily renaming it to something else may fix
+your installation issue.
 
 Old bcbio version support
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -263,34 +346,6 @@ upgrade -u stable`` to get the latest version, then proceed
 again. Pre 0.7.0 versions won't have the ``upgrade`` command and need
 ``bcbio_nextgen.py -u stable`` to get up to date.
 
-Proxy or firewall problems
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Some steps retrieve third party tools from GitHub, which can run into
-issues if you're behind a proxy or block git ports. To instruct git to
-use ``https://`` globally instead of ``git://``::
-
-    $ git config --global url.https://github.com/.insteadOf git://github.com/
-
-
-ImportErrors
-~~~~~~~~~~~~
-Import errors with tracebacks containing Python libraries outside of the bcbio
-distribution (``/path/to/bcbio/anaconda``) are often due to other conflicting
-Python installations. bcbio tries to isolate itself as much as possible but
-external libraries can get included during installation due to the
-PYTHONHOME or PYTHONPATH environmental variation or local site libraries.
-These commands will temporary unset those to get bcbio installed, after which it
-should ignore them automatically::
-
-    $ unset PYTHONHOME
-    $ unset PYTHONPATH
-    $ export PYTHONNOUSERSITE=1
-
-Finally, having a .pydistutils.cfg file in your home directory can mess with
-where the libraries get installed. If you have this file in your
-home directory, temporarily renaming it to something else may fix
-your installation issue.
 
 Manual process
 ==============
@@ -311,7 +366,7 @@ You can install the latest release code with::
 Or the latest development version from GitHub::
 
       git clone https://github.com/chapmanb/bcbio-nextgen.git
-      cd bcbio-nextgen && python setup.py build && sudo python setup.py install
+      cd bcbio-nextgen && python setup.py build && python setup.py install
 
 This requires Python 2.7. The setup script installs
 required Python library dependencies. If you'd like to install the

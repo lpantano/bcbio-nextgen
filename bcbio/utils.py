@@ -13,6 +13,8 @@ import ConfigParser
 import collections
 import fnmatch
 import subprocess
+import sys
+import subprocess
 
 import toolz as tz
 import yaml
@@ -249,7 +251,10 @@ def splitext_plus(f):
 
 def remove_safe(f):
     try:
-        os.remove(f)
+        if os.path.isdir(f):
+            shutil.rmtree(f)
+        else:
+            os.remove(f)
     except OSError:
         pass
 
@@ -264,6 +269,13 @@ def file_plus_index(fname):
     else:
         return [fname]
 
+def copy_plus(orig, new):
+    """Copy a fils, including biological index files.
+    """
+    for ext in ["", ".idx", ".gbi", ".tbi", ".bai"]:
+        if os.path.exists(orig + ext) and (not os.path.lexists(new + ext) or not os.path.exists(new + ext)):
+            shutil.copyfile(orig + ext, new + ext)
+
 def symlink_plus(orig, new):
     """Create relative symlinks and handle associated biological index files.
     """
@@ -271,11 +283,14 @@ def symlink_plus(orig, new):
         if os.path.exists(orig + ext) and (not os.path.lexists(new + ext) or not os.path.exists(new + ext)):
             with chdir(os.path.dirname(new)):
                 remove_safe(new + ext)
-                os.symlink(os.path.relpath(orig + ext), os.path.basename(new + ext))
-                # Work around symlink issues on some filesystems. Randomly fail to symlink.
-                if not os.path.exists(new + ext) or not os.path.lexists(new + ext):
-                    remove_safe(new + ext)
-                    shutil.copyfile(orig + ext, new + ext)
+               # Work around symlink issues on some filesystems. Randomly
+               # fail to symlink.
+                try:
+                    os.symlink(os.path.relpath(orig + ext), os.path.basename(new + ext))
+                except OSError:
+                    if not os.path.exists(new + ext) or not os.path.lexists(new + ext):
+                        remove_safe(new + ext)
+                        shutil.copyfile(orig + ext, new + ext)
     orig_noext = splitext_plus(orig)[0]
     new_noext = splitext_plus(new)[0]
     for sub_ext in [".bai"]:
@@ -337,11 +352,34 @@ def partition_all(n, iterable):
             break
         yield chunk
 
-def partition(pred, iterable):
+def robust_partition_all(n, iterable):
+    """
+    replaces partition_all with a more robust version.
+    Workaround for a segfault in pybedtools when using a BedTool as an iterator:
+    https://github.com/daler/pybedtools/issues/88 for the discussion
+    """
+    it = iter(iterable)
+    while True:
+        x = []
+        for _ in range(n):
+            try:
+                x.append(it.next())
+            except StopIteration:
+                yield x
+                # Omitting this StopIteration results in a segfault!
+                raise StopIteration
+        yield x
+
+def partition(pred, iterable, tolist=False):
     'Use a predicate to partition entries into false entries and true entries'
     # partition(is_odd, range(10)) --> 0 2 4 6 8   and  1 3 5 7 9
     t1, t2 = itertools.tee(iterable)
-    return itertools.ifilterfalse(pred, t1), itertools.ifilter(pred, t2)
+    ifalse = itertools.ifilterfalse(pred, t1)
+    itrue = itertools.ifilter(pred, t2)
+    if tolist:
+        return list(ifalse), list(itrue)
+    else:
+        return ifalse, itrue
 
 # ## Dealing with configuration files
 
@@ -544,6 +582,17 @@ def dictapply(d, fn):
             d[k] = fn(v)
     return d
 
+def Rscript_cmd():
+    """Retrieve path to locally installed Rscript or first in PATH.
+
+    Prefers Rscript version installed via conda to a system version.
+    """
+    rscript = which(os.path.join(os.path.dirname(os.path.realpath(sys.executable)), "Rscript"))
+    if rscript:
+        return rscript
+    else:
+        return which("Rscript")
+
 def R_sitelib():
     """Retrieve the R site-library installed with the bcbio installer.
     """
@@ -556,7 +605,8 @@ def R_package_path(package):
     return the path to an installed R package
     """
     local_sitelib = R_sitelib()
-    cmd = """Rscript -e '.libPaths(c("{local_sitelib}")); find.package("{package}")'"""
+    rscript = Rscript_cmd()
+    cmd = """{rscript} -e '.libPaths(c("{local_sitelib}")); find.package("{package}")'"""
     try:
         output = subprocess.check_output(cmd.format(**locals()), shell=True)
     except subprocess.CalledProcessError, e:
@@ -601,3 +651,19 @@ def rbind(dfs):
     for d in dfs[1:]:
         df = df.append(d)
     return df
+
+def max_command_length():
+    """
+    get the maximum length of the command line, in bytes, defaulting
+    to a conservative number if not set
+    http://www.in-ulm.de/~mascheck/various/argmax/
+    """
+    DEFAULT_MAX_LENGTH = 150000 # lowest seen so far is 200k
+    try:
+        arg_max = os.sysconf('SC_ARG_MAX')
+        env_lines = len(os.environ) * 4
+        env_chars = sum([len(x) + len(y) for x, y in os.environ.iteritems()])
+        arg_length = arg_max - env_lines - 2048
+    except ValueError:
+        arg_length = DEFAULT_MAX_LENGTH
+    return arg_length if arg_length > 0 else DEFAULT_MAX_LENGTH

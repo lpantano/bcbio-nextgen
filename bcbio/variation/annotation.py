@@ -6,6 +6,7 @@ import os
 
 from bcbio import broad, utils
 from bcbio.distributed.transaction import file_transaction
+from bcbio.provenance import do
 from bcbio.variation import vcfutils
 
 def get_gatk_annotations(config, include_depth=True):
@@ -28,17 +29,22 @@ def get_gatk_annotations(config, include_depth=True):
             anns += ["DepthOfCoverage"]
     return anns
 
+def add_dbsnp(orig_file, dbsnp_file, config):
+    """Annotate a VCF file with dbSNP.
+    """
+    orig_file = vcfutils.bgzip_and_index(orig_file, config)
+    out_file = "%s-wdbsnp%s" % utils.splitext_plus(orig_file)
+    if not utils.file_uptodate(out_file, orig_file):
+        with file_transaction(config, out_file) as tx_out_file:
+            cmd = "bcftools annotate -c ID -a {dbsnp_file} -o {tx_out_file} -O z {orig_file}"
+            do.run(cmd.format(**locals()), "Annotate with dbSNP")
+    return out_file
+
 def annotate_nongatk_vcf(orig_file, bam_files, dbsnp_file, ref_file, config):
     """Annotate a VCF file with dbSNP and standard GATK called annotations.
     """
     orig_file = vcfutils.bgzip_and_index(orig_file, config)
-    try:
-        broad_runner = broad.runner_from_config(config)
-    except ValueError, msg:
-        if str(msg).find("Could not find directory in config for gatk") >= 0:
-            broad_runner = None
-        else:
-            raise
+    broad_runner = broad.runner_from_config_safe(config)
     if not broad_runner or not broad_runner.has_gatk():
         return orig_file
     else:

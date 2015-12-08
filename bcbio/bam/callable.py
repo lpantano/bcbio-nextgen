@@ -11,11 +11,9 @@ small blocks.
 """
 import contextlib
 import copy
-from distutils.version import LooseVersion
-import operator
 import os
+import shutil
 import subprocess
-import sys
 
 import numpy
 import pybedtools
@@ -23,7 +21,7 @@ import pysam
 import toolz as tz
 import yaml
 
-from bcbio import bam, broad, utils
+from bcbio import broad, utils
 from bcbio.bam import ref
 from bcbio.log import logger
 from bcbio.distributed import multi, prun
@@ -31,8 +29,8 @@ from bcbio.distributed.split import parallel_split_combine
 from bcbio.distributed.transaction import file_transaction
 from bcbio.pipeline import config_utils, shared
 from bcbio.pipeline import datadict as dd
-from bcbio.provenance import do, programs
-from bcbio.variation import bedutils
+from bcbio.provenance import do
+from bcbio.variation import bedutils, realign
 from bcbio.variation import multi as vmulti
 
 def parallel_callable_loci(in_bam, ref_file, data):
@@ -55,42 +53,36 @@ def calc_callable_loci(data, region=None, out_file=None):
     """
     if out_file is None:
         out_file = "%s-callable.bed" % os.path.splitext(data["work_bam"])[0]
-    max_depth = utils.get_in(data, ("config", "algorithm", "coverage_depth_max"), 10000)
-    depth = {"max": max_depth * 7 if max_depth > 0 else sys.maxint - 1,
-             "min": utils.get_in(data, ("config", "algorithm", "coverage_depth_min"), 4)}
+    depth = {"min": dd.get_coverage_depth_min(data)}
     if not utils.file_exists(out_file):
-        with file_transaction(data, out_file) as tx_out_file:
-            ref_file = tz.get_in(["reference", "fasta", "base"], data)
-            region_file, calc_callable = _regions_for_coverage(data, region, ref_file, tx_out_file)
-            if calc_callable:
-                _group_by_ctype(_get_coverage_file(data["work_bam"], ref_file, region, region_file, depth,
-                                                   tx_out_file, data),
-                                depth, region_file, tx_out_file)
-            # special case, do not calculate if we are in a chromosome not covered by BED file
-            else:
-                os.rename(region_file, tx_out_file)
+        ref_file = tz.get_in(["reference", "fasta", "base"], data)
+        region_file, calc_callable = _regions_for_coverage(data, region, ref_file, out_file)
+        if calc_callable:
+            _group_by_ctype(_get_coverage_file(data["work_bam"], ref_file, region, region_file, depth,
+                                               out_file, data),
+                            depth, region, region_file, out_file, data)
+        # special case, do not calculate if we are in a chromosome not covered by BED file
+        else:
+            with file_transaction(data, out_file) as tx_out_file:
+                shutil.move(region_file, tx_out_file)
     return [{"callable_bed": out_file, "config": data["config"], "work_bam": data["work_bam"]}]
 
-def _group_by_ctype(bed_file, depth, region_file, out_file):
+def _group_by_ctype(bed_file, depth, region, region_file, out_file, data):
     """Group adjacent callable/uncallble regions into defined intervals.
 
     Uses tips from bedtools discussion:
     https://groups.google.com/d/msg/bedtools-discuss/qYDE6XF-GRA/2icQtUeOX_UJ
     https://gist.github.com/arq5x/b67196a46db5b63bee06
     """
-    def assign_coverage(feat):
-        feat.name = _get_ctype(float(feat.name), depth)
-        return feat
-    full_out_file = "%s-full%s" % utils.splitext_plus(out_file)
-    with open(full_out_file, "w") as out_handle:
-        kwargs = {"g": [1, 4], "c": [1, 2, 3, 4], "ops": ["first", "first", "max", "first"]}
-        # back compatible precision https://github.com/chapmanb/bcbio-nextgen/issues/664
-        if LooseVersion(programs.get_version_manifest("bedtools", True)) >= LooseVersion("2.22.0"):
-            kwargs["prec"] = 21
-        for line in open(pybedtools.BedTool(bed_file).each(assign_coverage).saveas()
-                                                     .groupby(**kwargs).fn):
-            out_handle.write("\t".join(line.split("\t")[2:]))
-    pybedtools.BedTool(full_out_file).intersect(region_file, nonamecheck=True).saveas(out_file)
+    with file_transaction(data, out_file) as tx_out_file:
+        min_cov = depth["min"]
+        cmd = (r"""cat {bed_file} | awk '{{if ($4 == 0) {{print $0"\tNO_COVERAGE"}} """
+               r"""else if ($4 < {min_cov}) {{print $0"\tLOW_COVERAGE"}} """
+               r"""else {{print $0"\tCALLABLE"}} }}' | """
+               "bedtools groupby -prec 21 -g 1,5 -c 1,2,3,5 -o first,first,max,first | "
+               "cut -f 3-6 | "
+               "bedtools intersect -nonamecheck -a - -b {region_file} > {tx_out_file}")
+        do.run(cmd.format(**locals()), "bedtools groupby coverage: %s" % (str(region)), data)
 
 def _get_coverage_file(in_bam, ref_file, region, region_file, depth, base_file, data):
     """Retrieve summary of coverage in a region.
@@ -100,13 +92,11 @@ def _get_coverage_file(in_bam, ref_file, region, region_file, depth, base_file, 
     out_file = "%s-genomecov.bed" % utils.splitext_plus(base_file)[0]
     if not utils.file_exists(out_file):
         with file_transaction(data, out_file) as tx_out_file:
-            bam.index(in_bam, data["config"])
             fai_file = ref.fasta_idx(ref_file, data["config"])
             sambamba = config_utils.get_program("sambamba", data["config"])
             bedtools = config_utils.get_program("bedtools", data["config"])
-            max_depth = depth["max"] + 1
             cmd = ("{sambamba} view -F 'mapping_quality > 0' -L {region_file} -f bam -l 1 {in_bam} | "
-                   "{bedtools} genomecov -split -ibam stdin -bga -g {fai_file} -max {max_depth} "
+                   "{bedtools} genomecov -split -ibam stdin -bga -g {fai_file} "
                    "> {tx_out_file}")
             do.run(cmd.format(**locals()), "bedtools genomecov: %s" % (str(region)), data)
     # Empty output file, no coverage for the whole contig
@@ -117,23 +107,24 @@ def _get_coverage_file(in_bam, ref_file, region, region_file, depth, base_file, 
                     out_handle.write("%s\t%s\t%s\t%s\n" % (feat.chrom, feat.start, feat.end, 0))
     return out_file
 
-def _get_ctype(count, depth):
-    if count == 0:
-        return "NO_COVERAGE"
-    elif count < depth["min"]:
-        return "LOW_COVERAGE"
-    elif count > depth["max"]:
-        return "EXCESSIVE_COVERAGE"
-    else:
-        return "CALLABLE"
-
 def _regions_for_coverage(data, region, ref_file, out_file):
     """Retrieve BED file of regions we need to calculate coverage in.
+
+    Checks for variant region specifications that do not overlap contigs
+    (in which case we do not calculate coverage) and regions smaller than
+    callable_min_size (in which case we assign everything as callable).
+    callable_min_size avoids calculations for small chromosomes we won't
+    split on later, saving computation and disk IO.
     """
     variant_regions = bedutils.merge_overlaps(dd.get_variant_regions(data), data)
     ready_region = shared.subset_variant_regions(variant_regions, region, out_file)
     custom_file = "%s-coverageregions.bed" % utils.splitext_plus(out_file)[0]
-    if not ready_region:
+    region_size = _get_region_size(ref_file, data, region)
+    if variant_regions is None and region_size is not None and region_size < dd.get_callable_min_size(data):
+        coverage_str = "CALLABLE" if realign.has_aligned_reads(dd.get_work_bam(data), region) else "NO_COVERAGE"
+        custom_file = _write_all_chrom_file(coverage_str, custom_file, ref_file, region, data)
+        return custom_file, False
+    elif not ready_region:
         get_ref_bedtool(ref_file, data["config"]).saveas(custom_file)
         return custom_file, True
     elif os.path.isfile(ready_region):
@@ -143,11 +134,25 @@ def _regions_for_coverage(data, region, ref_file, out_file):
         pybedtools.BedTool("%s\t%s\t%s\n" % (c, s, e), from_string=True).saveas(custom_file)
         return custom_file, True
     else:
-        with file_transaction(data, custom_file) as tx_out_file:
-            with open(tx_out_file, "w") as out_handle:
-                for feat in get_ref_bedtool(ref_file, data["config"], region):
-                    out_handle.write("%s\t%s\t%s\t%s\n" % (feat.chrom, feat.start, feat.end, "NO_COVERAGE"))
+        custom_file = _write_all_chrom_file("NO_COVERAGE", custom_file, ref_file, region, data)
         return custom_file, variant_regions is None
+
+def _write_all_chrom_file(coverage_str, out_file, ref_file, region, data):
+    """Write a coverage calculation for an entire chromosome, skipping work of running bedtools.
+    """
+    with file_transaction(data, out_file) as tx_out_file:
+        with open(tx_out_file, "w") as out_handle:
+            for feat in get_ref_bedtool(ref_file, data["config"], region):
+                out_handle.write("%s\t%s\t%s\t%s\n" % (feat.chrom, feat.start, feat.end, coverage_str))
+    return out_file
+
+def _get_region_size(ref_file, data, region=None):
+    """Retrieve size of a region, potentially returning None if not set.
+    """
+    if region:
+        for contig in ref.file_contigs(ref_file, data["config"]):
+            if contig.name == region:
+                return contig.size
 
 def sample_callable_bed(bam_file, ref_file, data):
     """Retrieve callable regions for a sample subset by defined analysis regions.
@@ -179,7 +184,7 @@ def calculate_offtarget(bam_file, ref_file, data):
             with file_transaction(data, out_file) as tx_out_file:
                 offtarget_regions = "%s-regions.bed" % utils.splitext_plus(out_file)[0]
                 ref_bed = get_ref_bedtool(ref_file, data["config"])
-                ref_bed.subtract(pybedtools.BedTool(vrs_file)).saveas(offtarget_regions)
+                ref_bed.subtract(pybedtools.BedTool(vrs_file), nonamecheck=True).saveas(offtarget_regions)
                 cmd = ("samtools view -u {bam_file} -L {offtarget_regions} | "
                        "bedtools intersect -abam - -b {offtarget_regions} -f 1.0 -bed | wc -l")
                 offtarget_count = int(subprocess.check_output(cmd.format(**locals()), shell=True))
@@ -249,7 +254,7 @@ def _add_config_regions(nblock_regions, ref_regions, config):
             str_regions = str(input_regions[0]).strip()
             input_regions = pybedtools.BedTool("%s\n%s" % (str_regions, str_regions),
                                                from_string=True)
-        input_nblock = ref_regions.subtract(input_regions)
+        input_nblock = ref_regions.subtract(input_regions, nonamecheck=True)
         if input_nblock == ref_regions:
             raise ValueError("Input variant_region file (%s) "
                              "excludes all genomic regions. Do the chromosome names "
@@ -316,7 +321,7 @@ def block_regions(in_bam, ref_file, data):
     with no read support, that can be analyzed independently.
     """
     config = data["config"]
-    min_n_size = int(config["algorithm"].get("nomap_split_size", 100))
+    min_n_size = int(config["algorithm"].get("nomap_split_size", 250))
     with shared.bedtools_tmpdir({"config": config}):
         callable_bed = parallel_callable_loci(in_bam, ref_file, data)
         nblock_bed = "%s-nblocks%s" % os.path.splitext(callable_bed)
@@ -325,9 +330,9 @@ def block_regions(in_bam, ref_file, data):
             ref_regions = get_ref_bedtool(ref_file, config)
             nblock_regions = _get_nblock_regions(callable_bed, min_n_size, ref_regions)
             nblock_regions = _add_config_regions(nblock_regions, ref_regions, config)
-            nblock_regions.saveas(nblock_bed)
-            if len(ref_regions.subtract(nblock_regions)) > 0:
-                ref_regions.subtract(nblock_bed).merge(d=min_n_size).saveas(callblock_bed)
+            nblock_regions.filter(lambda r: len(r) > min_n_size).saveas(nblock_bed)
+            if len(ref_regions.subtract(nblock_regions, nonamecheck=True)) > 0:
+                ref_regions.subtract(nblock_bed, nonamecheck=True).merge(d=min_n_size).saveas(callblock_bed)
             else:
                 raise ValueError("No callable regions found from BAM file. Alignment regions might "
                                  "not overlap with regions found in your `variant_regions` BED: %s" % in_bam)
@@ -336,7 +341,7 @@ def block_regions(in_bam, ref_file, data):
 def _write_bed_regions(data, final_regions, out_file, out_file_ref):
     ref_file = tz.get_in(["reference", "fasta", "base"], data)
     ref_regions = get_ref_bedtool(ref_file, data["config"])
-    noanalysis_regions = ref_regions.subtract(final_regions)
+    noanalysis_regions = ref_regions.subtract(final_regions, nonamecheck=True)
     final_regions.saveas(out_file)
     noanalysis_regions.saveas(out_file_ref)
 
@@ -451,16 +456,18 @@ def _combine_sample_regions_batch(batch, items):
             analysis_file, no_analysis_file = None, None
         else:
             with file_transaction(items[0], analysis_file, no_analysis_file) as (tx_afile, tx_noafile):
-                nblock_regions = reduce(operator.add, bed_regions).saveas(
+                def intersect_two(a, b):
+                    return a.intersect(b, u=True, nonamecheck=True)
+                nblock_regions = reduce(intersect_two, bed_regions).saveas(
                     "%s-nblock%s" % utils.splitext_plus(tx_afile))
                 ref_file = tz.get_in(["reference", "fasta", "base"], items[0])
                 ref_regions = get_ref_bedtool(ref_file, config)
-                min_n_size = int(config["algorithm"].get("nomap_split_size", 100))
+                min_n_size = int(config["algorithm"].get("nomap_split_size", 250))
                 block_filter = NBlockRegionPicker(ref_regions, config, min_n_size)
                 final_nblock_regions = nblock_regions.filter(
                     block_filter.include_block).saveas().each(block_filter.expand_block).saveas(
                         "%s-nblockfinal%s" % utils.splitext_plus(tx_afile))
-                final_regions = ref_regions.subtract(final_nblock_regions).merge(d=min_n_size)
+                final_regions = ref_regions.subtract(final_nblock_regions, nonamecheck=True).merge(d=min_n_size)
                 _write_bed_regions(items[0], final_regions, tx_afile, tx_noafile)
     if analysis_file and utils.file_exists(analysis_file):
         return analysis_file, no_analysis_file

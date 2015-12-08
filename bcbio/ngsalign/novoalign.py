@@ -17,7 +17,10 @@ from bcbio.utils import (memoize_outfile, file_exists)
 # ## BAM realignment
 
 def get_rg_info(names):
-    return r"@RG\tID:{rg}\tPL:{pl}\tPU:{pu}\tSM:{sample}".format(**names)
+    out = r"@RG\tID:{rg}\tPL:{pl}\tPU:{pu}\tSM:{sample}".format(**names)
+    if names.get("lb"):
+        out += r"\tLB:{lb}".format(**names)
+    return out
 
 def align_bam(in_bam, ref_file, names, align_dir, data):
     """Perform realignment of input BAM file; uses unix pipes for avoid IO.
@@ -40,7 +43,7 @@ def align_bam(in_bam, ref_file, names, align_dir, data):
                 cmd = ("{samtools} sort -n -o -l 1 -@ {num_cores} -m {max_mem} {in_bam} {prefix1} "
                        "| {novoalign} -o SAM '{rg_info}' -d {ref_file} -f /dev/stdin "
                        "  -F BAMPE -c {num_cores} {extra_novo_args} | ")
-                cmd = cmd.format(**locals()) + tobam_cl
+                cmd = (cmd + tobam_cl).format(**locals())
                 do.run(cmd, "Novoalign: %s" % names["sample"], None,
                        [do.file_nonempty(tx_out_file), do.file_reasonable_size(tx_out_file, in_bam)])
     return out_file
@@ -73,7 +76,7 @@ def align_pipe(fastq_file, pair_file, ref_file, names, align_dir, data):
                 tx_out_prefix = os.path.splitext(tx_out_file)[0]
                 cmd = ("{novoalign} -o SAM '{rg_info}' -d {ref_file} -f {fastq_file} {pair_file} "
                        "  -c {num_cores} {extra_novo_args} | ")
-                cmd = cmd.format(**locals()) + tobam_cl
+                cmd = (cmd + tobam_cl).format(**locals())
                 do.run(cmd, "Novoalign: %s" % names["sample"], None,
                        [do.file_nonempty(tx_out_file), do.file_reasonable_size(tx_out_file, fastq_file)])
     data["work_bam"] = out_file

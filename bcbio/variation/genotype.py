@@ -6,7 +6,7 @@ import copy
 
 import toolz as tz
 
-from bcbio import utils
+from bcbio import bam, utils
 from bcbio.distributed.split import grouped_parallel_split_combine
 from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import region
@@ -47,7 +47,7 @@ def combine_multiple_callers(samples):
         work_bam = tz.get_in(("combine", "work_bam", "out"), data, data.get("align_bam"))
         jointcaller = tz.get_in(("config", "algorithm", "jointcaller"), data)
         variantcaller = get_variantcaller(data)
-        key = (data["description"], work_bam)
+        key = (multi.get_batch_for_key(data), work_bam)
         if key not in by_bam:
             by_bam[key] = []
         by_bam[key].append((variantcaller, jointcaller, data))
@@ -123,7 +123,7 @@ def _split_by_ready_regions(ext, file_key, dir_ext_fn):
     return _do_work
 
 def _collapse_by_bam_variantcaller(samples):
-    """Collapse regions to a single representative by BAM input and variant caller.
+    """Collapse regions to a single representative by BAM input, variant caller and batch.
     """
     by_bam = collections.OrderedDict()
     for data in (x[0] for x in samples):
@@ -131,7 +131,7 @@ def _collapse_by_bam_variantcaller(samples):
         variantcaller = get_variantcaller(data)
         if isinstance(work_bam, list):
             work_bam = tuple(work_bam)
-        key = (data["description"], work_bam, variantcaller)
+        key = (multi.get_batch_for_key(data), work_bam, variantcaller)
         try:
             by_bam[key].append(data)
         except KeyError:
@@ -168,7 +168,7 @@ def parallel_variantcall_region(samples, run_parallel):
     return extras + samples
 
 def _handle_precalled(data):
-    """Symlink in external pre-called variants fed into analysis.
+    """Copy in external pre-called variants fed into analysis.
     """
     if data.get("vrn_file"):
         vrn_file = data["vrn_file"]
@@ -179,7 +179,7 @@ def _handle_precalled(data):
         ext = utils.splitext_plus(vrn_file)[-1]
         orig_file = os.path.abspath(vrn_file)
         our_vrn_file = os.path.join(precalled_dir, "%s-precalled%s" % (dd.get_sample_name(data), ext))
-        utils.symlink_plus(orig_file, our_vrn_file)
+        utils.copy_plus(orig_file, our_vrn_file)
         data["vrn_file"] = our_vrn_file
     return data
 
@@ -227,6 +227,7 @@ def get_variantcallers():
             "scalpel": scalpel.run_scalpel,
             "vardict": vardict.run_vardict,
             "vardict-java": vardict.run_vardict,
+            "vardict-perl": vardict.run_vardict,
             "qsnp": qsnp.run_qsnp}
 
 def variantcall_sample(data, region=None, align_bams=None, out_file=None):
@@ -246,6 +247,8 @@ def variantcall_sample(data, region=None, align_bams=None, out_file=None):
         call_file = "%s-raw%s" % utils.splitext_plus(out_file)
         assoc_files = tz.get_in(("genome_resources", "variation"), data, {})
         if not assoc_files: assoc_files = {}
+        for bam_file in align_bams:
+            bam.index(bam_file, data["config"], check_timestamp=False)
         call_file = caller_fn(align_bams, items, sam_ref, assoc_files, region, call_file)
         if data["config"]["algorithm"].get("phasing", False) == "gatk":
             call_file = phasing.read_backed_phasing(call_file, align_bams, sam_ref, region, config)

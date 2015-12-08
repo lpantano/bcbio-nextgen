@@ -28,7 +28,7 @@ Python::
 
     wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh
     bash Miniconda-latest-Linux-x86_64.sh -b -p ~/install/bcbio-vm/anaconda
-    ~/install/bcbio-vm/anaconda/bin/conda install --yes -c https://conda.binstar.org/bcbio bcbio-nextgen-vm
+    ~/install/bcbio-vm/anaconda/bin/conda install --yes -c bcbio bcbio-nextgen-vm
     ln -s ~/install/bcbio-vm/anaconda/bin/bcbio_vm.py /usr/local/bin/bcbio_vm.py
 
 We support both Linux and Mac OSX as clients for running remote AWS bcbio clusters.
@@ -75,16 +75,19 @@ Extra software
 
 We're not able to automatically install some useful tools in pre-built docker
 containers due to licensing restrictions. Variant calling with GATK requires a
-manual download from the `GATK download`_ site for academic users.  Commercial 
+manual download from the `GATK download`_ site for academic users.  Commercial
 users `need a license`_ for GTAK and for somatic calling with muTect. To make these jars available,
 upload them to the S3 bucket in a ``jars`` directory. bcbio will automatically
 include the correct GATK and muTect directives during your run.  Alternatively,
-you can also manually specify the path to the jars using the global
+you can also manually specify the path to the jars using a global
 ``resources`` section of your input sample YAML file::
 
     resources:
       gatk:
         jar: s3://bcbio-syn3-eval/jars/GenomeAnalysisTK.jar
+
+As with sample YAML scripts, specify a different region with an ``@`` in the
+bucket name: ``s3://your-project@us-west-2/jars/GenomeAnalysisTK.jar``
 
 .. _GATK download: http://www.broadinstitute.org/gatk/download
 .. _need a license: https://www.broadinstitute.org/gatk/about/#licensing
@@ -155,7 +158,7 @@ When happy with your setup, start the cluster with::
 
     bcbio_vm.py aws cluster start
 
-The cluster will take five to ten minutes to start. If you encounter any
+The cluster will take five to ten minutes to start and be provisioned. If you encounter any
 intermittent failures, you can rerun the cluster configuration step with
 ``bcbio_vm.py aws cluster setup`` or the bcbio-specific installation with
 ``bcbio_vm.py aws cluster bootstrap``.
@@ -183,7 +186,7 @@ to set up a Lustre scratch filesystem on AWS.
   means lustre server is created successfully, you can rerun the lustre configuration step
   with ``bcbio_vm.py aws icel create --setup``. If you had any failure creating the lustre
   server before the collectl plugin installation, you should stop it, and try again.
-  
+
 
 - Once the ICEL stack and elasticluster cluster are both running, mount the
   filesystem on the cluster::
@@ -199,19 +202,27 @@ To run the analysis, connect to the head node with::
 
     bcbio_vm.py aws cluster ssh
 
-If you started a single machine, or a cluster using encrypted NFS, run with::
+Create your project directory and link the global bcbio configuration file in there with:
+
+- NFS file system (no Lustre)::
 
     mkdir /encrypted/your-project
     cd !$ && mkdir work && cd work
-    bcbio_vm.py run -n 8 s3://your-project/your-analysis/name.yaml
 
-Where the ``-n`` argument should be the number of cores on the machine.
-
-To run on a full cluster with a Lustre filesystem::
+- Lustre file system::
 
     sudo mkdir /scratch/cancer-dream-syn3-exome
     sudo chown ubuntu !$
     cd !$ && mkdir work && cd work
+
+If you started a single machine, run with::
+
+    bcbio_vm.py run -n 8 s3://your-project/your-analysis/name.yaml
+
+Where the ``-n`` argument should be the number of cores on the machine.
+
+To run on a full cluster::
+
     bcbio_vm.py ipythonprep s3://your-project/your-analysis/name.yaml slurm cloud -n 60
     sbatch bcbio_submit.sh
 
@@ -250,12 +261,14 @@ usage graphs with::
 
     bcbio_vm.py graph bcbio-nextgen.log
 
-Collectl stats will be in ``monitoring/collectl`` and plots are in
-``monitoring/graphs``. If you need to re-run plots later after shutting the
-cluster down, you can use the local collectl stats instead of retrieving from
-the server by running ``bcbio_vm.py graph bcbio-nextgen.log --cluster none``.
-If you'd like to run graphing from a local non-AWS run, manually place collectl
-files from each node to analyze in ``monitoring/collectl/yournodename-timestamp.raw.gz``.
+By default the collectl stats will be in ``monitoring/collectl`` and plots in
+``monitoring/graphs`` based on the above log timeframe. If you need to re-run
+plots later after shutting the cluster down, you can use the `none` cluster flag
+by running ``bcbio_vm.py graph bcbio-nextgen.log --cluster none``.
+
+If you'd like to run graphing from a local non-AWS run, such as a local HPC cluster,
+run ``bcbio_vm.py graph bcbio-nextgen.log --cluster local`` instead.
+
 In addition to plots, the
 `summarize_timing.py <https://github.com/chapmanb/bcbio-nextgen/blob/master/scripts/utils/summarize_timing.py>`_
 utility script prepares a summary table of run times per step.

@@ -14,7 +14,9 @@ The output directory contains sample specific output files labeled by
 sample name and a more general project directory. The sample
 directories contain all of the sample specific output files, while the
 project directory contains global files like project summaries or
-batched population level variant calls.
+batched population level variant calls. See the :ref:`teaching` documentation
+for a full variant calling example with additional details about configuration
+setting and resulting output files.
 
 Project directory
 ~~~~~~~~~~~~~~~~~
@@ -64,26 +66,10 @@ the documentation.
 - `Calculate and plot coverage`_ with matplolib, from Luca Beltrame.
 - `Another way`_ to visualize coverage for targeted NGS (exome) experiments with bedtools and R, from Stephen Turner
 - assess the efficiency of targeted enrichment sequencing with `ngscat`_
+- `MultiQC`_: Run MultiQC on the top of the final directory to get a general summary with information collected from some of
+  the executed QC tools. List of supported QC tools can be found `here <https://github.com/ewels/MultiQC>`_.
 
 .. _ngscat: http://www.bioinfomgp.org/ngscat
 .. _Calculate and plot coverage:  https://github.com/chapmanb/bcbio-nextgen/issues/195#issuecomment-39071048
 .. _Another way: http://gettinggeneticsdone.blogspot.com/2014/03/visualize-coverage-exome-targeted-ngs-bedtools.html
-
-Resources usage
-===================
-
-If the nodes are monitoring resources with collectl <http://collectl.sourceforge.net/>`_. 
-bcbio_nextgen.py can use those files to plot CPU, memory, disk and network usage 
-during each step of a run. To prepare resources usage plots after finishing an 
-analysis, copy all collectl logs from the nodes used during the analysis to 
-the same folder (``collectl_logs``). Normally, these logs are under ``/var/log/collectl`` in each node. 
-bcbio needs only the logs from the nodes and the time when it ran  
-(``monitoring/collectl/yournodename-timestamp.raw.gz``). 
-
-
-The figures will be under ``monitoring/collectl`` folder after this command::
-
-    bcbio_nextgen.py graph log/bcbio-nextgen.log -r collectl_logs -o monitoring
-
-You can edit the steps showed in the figure by editing the lines containing the ``Timing`` word in ``bcbio-nextgen.log`.` 
-
+.. _MultiQC: http://multiqc.info/

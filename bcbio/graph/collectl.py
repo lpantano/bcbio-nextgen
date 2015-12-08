@@ -173,12 +173,15 @@ class _CollectlGunzip(gzip.GzipFile):
 
 
 def load_collectl(pattern, start_time, end_time):
-    """Read data from collectl data files into a pandas DataFrame."""
+    """Read data from collectl data files into a pandas DataFrame.
+        :pattern: Absolute path to raw collectl files
+    """
     start_tstamp = calendar.timegm(start_time.utctimetuple())
     end_tstamp = calendar.timegm(end_time.utctimetuple())
 
     cols = []
     rows = []
+
     for path in glob.glob(pattern):
         hardware, raw = _parse_raw(
             _CollectlGunzip(path, 'r'), start_tstamp, end_tstamp)

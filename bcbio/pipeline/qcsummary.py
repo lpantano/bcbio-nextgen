@@ -4,12 +4,15 @@ import collections
 import contextlib
 import csv
 import os
+import glob
 import shutil
 import subprocess
 
+import pandas as pd
 import lxml.html
 import yaml
 from datetime import datetime
+from collections import defaultdict
 # allow graceful during upgrades
 try:
     import matplotlib
@@ -18,6 +21,11 @@ try:
     plt.ioff()
 except ImportError:
     plt = None
+try:
+    from fadapa import Fadapa
+except ImportError:
+    Fadapa = None
+import pybedtools
 import pysam
 import toolz as tz
 import toolz.dicttoolz as dtz
@@ -29,10 +37,12 @@ from bcbio.pipeline import config_utils, run_info
 from bcbio.install import _get_data_dir
 from bcbio.provenance import do
 import bcbio.rnaseq.qc
-from bcbio.rnaseq.coverage import plot_gene_coverage
 import bcbio.pipeline.datadict as dd
-from bcbio import broad
-
+from bcbio.variation import bedutils
+from bcbio.variation import coverage_experimental as cov
+from bcbio.variation.coverage import decorate_problem_regions
+from bcbio.ngsalign.postalign import dedup_bam
+from bcbio.rnaseq import gtf
 # ## High level functions to generate summary
 
 
@@ -40,8 +50,9 @@ def generate_parallel(samples, run_parallel):
     """Provide parallel preparation of summary information for alignment and variant calling.
     """
     sum_samples = run_parallel("pipeline_summary", samples)
+    samples_coverage = report_summary(sum_samples, run_parallel)
     qsign_info = run_parallel("qsignature_summary", [sum_samples])
-    summary_file = write_project_summary(sum_samples, qsign_info)
+    summary_file = write_project_summary(samples_coverage, qsign_info)
     samples = []
     for data in sum_samples:
         if "summary" not in data[0]:
@@ -53,16 +64,17 @@ def generate_parallel(samples, run_parallel):
     samples = _add_researcher_summary(samples, summary_file)
     return samples
 
-
 def pipeline_summary(data):
     """Provide summary information on processing sample.
     """
     work_bam = data.get("work_bam")
-    if data["sam_ref"] is not None and work_bam and work_bam.endswith(".bam"):
+    if data["analysis"].lower().startswith("smallrna-seq"):
+        work_bam = data["clean_fastq"]
+        data["summary"] = _run_qc_tools(work_bam, data)
+    elif data["sam_ref"] is not None and work_bam and work_bam.endswith(".bam"):
         logger.info("Generating summary files: %s" % str(data["name"]))
         data["summary"] = _run_qc_tools(work_bam, data)
     return [[data]]
-
 
 def prep_pdf(qc_dir, config):
     """Create PDF from HTML summary outputs in QC directory.
@@ -88,7 +100,6 @@ def prep_pdf(qc_dir, config):
             do.run(cmd, "Convert QC HTML to PDF")
         return out_file
 
-
 def _run_qc_tools(bam_file, data):
     """Run a set of third party quality control tools, returning QC directory and metrics.
 
@@ -102,28 +113,32 @@ def _run_qc_tools(bam_file, data):
     if "fastqc" not in tz.get_in(("config", "algorithm", "tools_off"), data, []):
         to_run.append(("fastqc", _run_fastqc))
     if data["analysis"].lower().startswith("rna-seq"):
-        # to_run.append(("rnaseqc", bcbio.rnaseq.qc.sample_summary))
-        # to_run.append(("coverage", _run_gene_coverage))
-        # to_run.append(("complexity", _run_complexity))
+        to_run.append(("bamtools", _run_bamtools_stats))
         to_run.append(("qualimap", _rnaseq_qualimap))
     elif data["analysis"].lower().startswith("chip-seq"):
         to_run.append(["bamtools", _run_bamtools_stats])
-    else:
+    elif not data["analysis"].lower().startswith("smallrna-seq"):
         to_run += [("bamtools", _run_bamtools_stats), ("gemini", _run_gemini_stats)]
     if data["analysis"].lower().startswith(("standard", "variant2")):
         to_run.append(["qsignature", _run_qsignature_generator])
+        if "qualimap" in tz.get_in(("config", "algorithm", "tools_on"), data, []):
+            to_run.append(("qualimap", _run_qualimap))
     qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
     metrics = {}
     for program_name, qc_fn in to_run:
         cur_qc_dir = os.path.join(qc_dir, program_name)
         cur_metrics = qc_fn(bam_file, data, cur_qc_dir)
         metrics.update(cur_metrics)
-    ratio = bam.get_aligned_reads(bam_file, data)
-    if (ratio < 0.60 and data['config']["algorithm"].get("kraken", None) and
-          (data["analysis"].lower().startswith("rna-seq") or
-           data["analysis"].lower().startswith("standard"))):
-        cur_metrics = _run_kraken(data, ratio)
-        metrics.update(cur_metrics)
+    if data['config']["algorithm"].get("kraken", None):
+        if data["analysis"].lower().startswith("smallrna-seq"):
+            logger.info("Kraken is not compatible with srnaseq pipeline yet.")
+        else:
+            ratio = bam.get_aligned_reads(bam_file, data)
+            cur_metrics = _run_kraken(data, ratio)
+            metrics.update(cur_metrics)
+
+    bam.remove("%s-downsample%s" % os.path.splitext(bam_file))
+
     metrics["Name"] = data["name"][-1]
     metrics["Quality format"] = utils.get_in(data,
                                              ("config", "algorithm",
@@ -132,7 +147,6 @@ def _run_qc_tools(bam_file, data):
     return {"qc": qc_dir, "metrics": metrics}
 
 # ## Generate project level QC summary for quickly assessing large projects
-
 
 def write_project_summary(samples, qsign_info=None):
     """Write project summary information on the provided samples.
@@ -143,15 +157,11 @@ def write_project_summary(samples, qsign_info=None):
     out_file = os.path.join(work_dir, "project-summary.yaml")
     upload_dir = (os.path.join(work_dir, samples[0][0]["upload"]["dir"])
                   if "dir" in samples[0][0]["upload"] else "")
-    test_run = samples[0][0].get("test_run", False)
     date = str(datetime.now())
     prev_samples = _other_pipeline_samples(out_file, samples)
     with open(out_file, "w") as out_handle:
         yaml.safe_dump({"date": date}, out_handle,
                        default_flow_style=False, allow_unicode=False)
-        if test_run:
-            yaml.safe_dump({"test_run": True}, out_handle, default_flow_style=False,
-                           allow_unicode=False)
         if qsign_info:
             qsign_out = utils.deepish_copy(qsign_info[0])
             qsign_out.pop("out_dir", None)
@@ -165,7 +175,6 @@ def write_project_summary(samples, qsign_info=None):
                        default_flow_style=False, allow_unicode=False)
     return out_file
 
-
 def _other_pipeline_samples(summary_file, cur_samples):
     """Retrieve samples produced previously by another pipeline in the summary output.
     """
@@ -177,7 +186,6 @@ def _other_pipeline_samples(summary_file, cur_samples):
                 if s["description"] not in cur_descriptions:
                     out.append(s)
     return out
-
 
 def _save_fields(sample):
     to_save = ["dirs", "genome_resources", "genome_build", "sam_ref", "metadata",
@@ -197,17 +205,17 @@ def _save_fields(sample):
                 saved["summary"]["metrics"]["Disambiguated ambiguous reads"] = disambigStats[2]
     return saved
 
-
 def _parse_disambiguate(disambiguatestatsfilename):
     """Parse disambiguation stats from given file.
     """
-    disambig_stats = [-1, -1, -1]
+    disambig_stats = [0, 0, 0]
     with open(disambiguatestatsfilename, "r") as in_handle:
-        header = in_handle.readline().strip().split("\t")
-        if header == ['sample', 'unique species A pairs', 'unique species B pairs', 'ambiguous pairs']:
-            disambig_stats_tmp = in_handle.readline().strip().split("\t")[1:]
-            if len(disambig_stats_tmp) == 3:
-                disambig_stats = [int(x) for x in disambig_stats_tmp]
+        for i, line in enumerate(in_handle):
+            fields = line.strip().split("\t")
+            if i == 0:
+                assert fields == ['sample', 'unique species A pairs', 'unique species B pairs', 'ambiguous pairs']
+            else:
+                disambig_stats = [x + int(y) for x, y in zip(disambig_stats, fields[1:])]
     return disambig_stats
 
 # ## Generate researcher specific summaries
@@ -232,7 +240,6 @@ def _add_researcher_summary(samples, summary_yaml):
         out.append([data])
     return out
 
-
 def _summary_csv_by_researcher(summary_yaml, researcher, descrs, data):
     """Generate a CSV file with summary information for a researcher on this project.
     """
@@ -253,8 +260,9 @@ def _summary_csv_by_researcher(summary_yaml, researcher, descrs, data):
 # ## Run and parse read information from FastQC
 
 class FastQCParser:
-    def __init__(self, base_dir):
+    def __init__(self, base_dir, sample=None):
         self._dir = base_dir
+        self.sample = sample
 
     def get_fastqc_summary(self):
         ignore = set(["Total Sequences", "Filtered Sequences",
@@ -281,6 +289,39 @@ class FastQCParser:
                         out.append(line.rstrip("\r\n"))
         return out
 
+    def save_sections_into_file(self):
+
+        data_file = os.path.join(self._dir, "fastqc_data.txt")
+        if os.path.exists(data_file) and Fadapa:
+            parser = Fadapa(data_file)
+            module = [m[1] for m in parser.summary()][2:9]
+            for m in module:
+                out_file = os.path.join(self._dir, m.replace(" ", "_") + ".tsv")
+                dt = self._get_module(parser, m)
+                dt.to_csv(out_file, sep="\t", index=False)
+
+    def _get_module(self, parser, module):
+        """
+        Get module using fadapa package
+        """
+        dt = []
+        lines = parser.clean_data(module)
+        header = lines[0]
+        for data in lines[1:]:
+            if data[0].startswith("#"): #some modules have two headers
+                header = data
+                continue
+            if data[0].find("-") > -1: # expand positions 1-3 to 1, 2, 3
+                f, s = map(int, data[0].split("-"))
+                for pos in range(f, s):
+                    dt.append([str(pos)] + data[1:])
+            else:
+                dt.append(data)
+        dt = pd.DataFrame(dt)
+        dt.columns = [h.replace(" ", "_") for h in header]
+        dt['sample'] = self.sample
+        return dt
+
 def _run_gene_coverage(bam_file, data, out_dir):
     out_file = os.path.join(out_dir, "gene_coverage.pdf")
     ref_file = utils.get_in(data, ("genome_resources", "rnaseq", "transcripts"))
@@ -291,12 +332,11 @@ def _run_gene_coverage(bam_file, data, out_dir):
         plot_gene_coverage(bam_file, ref_file, count_file, tx_out_file)
     return {"gene_coverage": out_file}
 
-
 def _run_kraken(data, ratio):
     """Run kraken, generating report in specified directory and parsing metrics.
        Using only first paired reads.
     """
-    logger.info("Number of aligned reads < than 0.60 in %s: %s" % (str(data["name"]), ratio))
+    # logger.info("Number of aligned reads < than 0.60 in %s: %s" % (str(data["name"]), ratio))
     logger.info("Running kraken to determine contaminant: %s" % str(data["name"]))
     qc_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "qc", data["description"]))
     kraken_out = os.path.join(qc_dir, "kraken")
@@ -305,10 +345,11 @@ def _run_kraken(data, ratio):
     kraken_cmd = config_utils.get_program("kraken", data["config"])
     if db == "minikraken":
         db = os.path.join(_get_data_dir(), "genomes", "kraken", "minikraken")
-    else:
-        if not os.path.exists(db):
-            logger.info("kraken: no database found %s, skipping" % db)
-            return {"kraken_report": "null"}
+
+    if not os.path.exists(db):
+        logger.info("kraken: no database found %s, skipping" % db)
+        return {"kraken_report": "null"}
+
     if not os.path.exists(os.path.join(kraken_out, "kraken_out")):
         work_dir = os.path.dirname(kraken_out)
         utils.safe_makedir(work_dir)
@@ -332,7 +373,6 @@ def _run_kraken(data, ratio):
                 shutil.move(tx_tmp_dir, kraken_out)
     metrics = _parse_kraken_output(kraken_out, db, data)
     return metrics
-
 
 def _parse_kraken_output(out_dir, db, data):
     """Parse kraken stat info comming from stderr,
@@ -358,7 +398,6 @@ def _parse_kraken_output(out_dir, db, data):
     kraken.update(kraken_sum)
     return kraken
 
-
 def _summarize_kraken(fn):
     """get the value at species level"""
     kraken = {}
@@ -373,12 +412,11 @@ def _summarize_kraken(fn):
     kraken = {"kraken_sp": list_sp, "kraken_value": list_value}
     return kraken
 
-
 def _run_fastqc(bam_file, data, fastqc_out):
     """Run fastqc, generating report in specified directory and parsing metrics.
 
     Downsamples to 10 million reads to avoid excessive processing times with large
-    files, unless we're running a Standard/QC pipeline.
+    files, unless we're running a Standard/smallRNA-seq/QC pipeline.
 
     Handles fastqc 0.11+, which use a single HTML file and older versions that use
     a directory of files + images. The goal is to eventually move to only 0.11+
@@ -388,34 +426,40 @@ def _run_fastqc(bam_file, data, fastqc_out):
         work_dir = os.path.dirname(fastqc_out)
         utils.safe_makedir(work_dir)
         ds_bam = (bam.downsample(bam_file, data, 1e7)
-                  if data.get("analysis", "").lower() not in ["standard"]
+                  if data.get("analysis", "").lower() not in ["standard", "smallrna-seq"]
                   else None)
         bam_file = ds_bam if ds_bam else bam_file
-        fastqc_name = os.path.splitext(os.path.basename(bam_file))[0]
+        frmt = "bam" if bam_file.endswith("bam") else "fastq"
+        fastqc_name = utils.splitext_plus(os.path.basename(bam_file))[0]
+        fastqc_clean_name =  dd.get_sample_name(data)
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
             with utils.chdir(tx_tmp_dir):
                 cl = [config_utils.get_program("fastqc", data["config"]),
-                      "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, "-f", "bam", bam_file]
+                      "-d", tx_tmp_dir,
+                      "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, "-f", frmt, bam_file]
                 do.run(cl, "FastQC: %s" % data["name"][-1])
                 tx_fastqc_out = os.path.join(tx_tmp_dir, "%s_fastqc" % fastqc_name)
                 tx_combo_file = os.path.join(tx_tmp_dir, "%s_fastqc.html" % fastqc_name)
-                if os.path.exists("%s.zip" % tx_fastqc_out):
-                    os.remove("%s.zip" % tx_fastqc_out)
                 if not os.path.exists(sentry_file) and os.path.exists(tx_combo_file):
                     utils.safe_makedir(fastqc_out)
-                    shutil.move(os.path.join(tx_fastqc_out, "fastqc_data.txt"), fastqc_out)
+                    # Use sample name for reports instead of bam file name
+                    with open(os.path.join(tx_fastqc_out, "fastqc_data.txt"), 'r') as fastqc_bam_name, \
+                            open(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), 'w') as fastqc_sample_name:
+                        for line in fastqc_bam_name:
+                            fastqc_sample_name.write(line.replace(os.path.basename(bam_file), fastqc_clean_name))
+                    shutil.move(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), os.path.join(fastqc_out, 'fastqc_data.txt'))
                     shutil.move(tx_combo_file, sentry_file)
+                    if os.path.exists("%s.zip" % tx_fastqc_out):
+                        shutil.move("%s.zip" % tx_fastqc_out, os.path.join(fastqc_out, "%s.zip" % fastqc_clean_name))
                 elif not os.path.exists(sentry_file):
                     if os.path.exists(fastqc_out):
                         shutil.rmtree(fastqc_out)
                     shutil.move(tx_fastqc_out, fastqc_out)
-        if ds_bam and os.path.exists(ds_bam):
-            os.remove(ds_bam)
-    parser = FastQCParser(fastqc_out)
+    parser = FastQCParser(fastqc_out, data["name"][-1])
     stats = parser.get_fastqc_summary()
+    parser.save_sections_into_file()
     return stats
-
 
 def _run_complexity(bam_file, data, out_dir):
     try:
@@ -503,16 +547,20 @@ def _parse_qualimap_metrics(report_file):
         header = table.xpath("h3")[0].text
         if header in parsers:
             out.update(parsers[header](table))
+    new_names = []
+    for metric in out:
+        new_names.append(metric + "_qualimap_1e7reads_est")
+    out = dict(zip(new_names, out.values()))
     return out
 
 def _bed_to_bed6(orig_file, out_dir):
     """Convert bed to required bed6 inputs.
     """
-    import pybedtools
     bed6_file = os.path.join(out_dir, "%s-bed6%s" % os.path.splitext(os.path.basename(orig_file)))
     if not utils.file_exists(bed6_file):
         with open(bed6_file, "w") as out_handle:
             for i, region in enumerate(list(x) for x in pybedtools.BedTool(orig_file)):
+                region = [x for x in list(region) if x]
                 fillers = [str(i), "1.0", "+"]
                 full = region + fillers[:6 - len(region)]
                 out_handle.write("\t".join(full) + "\n")
@@ -523,6 +571,8 @@ def _run_qualimap(bam_file, data, out_dir):
     """
     report_file = os.path.join(out_dir, "qualimapReport.html")
     if not os.path.exists(report_file):
+        ds_bam = bam.downsample(bam_file, data, 1e7)
+        bam_file = ds_bam if ds_bam else bam_file
         utils.safe_makedir(out_dir)
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         qualimap = config_utils.get_program("qualimap", data["config"])
@@ -531,10 +581,10 @@ def _run_qualimap(bam_file, data, out_dir):
                                              num_cores)
         cmd = ("unset DISPLAY && {qualimap} bamqc -bam {bam_file} -outdir {out_dir} "
                "-nt {num_cores} --java-mem-size={max_mem}")
-        species = data["genome_resources"]["aliases"].get("ensembl", "").upper()
+        species = tz.get_in(("genome_resources", "aliases", "ensembl"), data, "")
         if species in ["HUMAN", "MOUSE"]:
             cmd += " -gd {species}"
-        regions = data["config"]["algorithm"].get("variant_regions")
+        regions = bedutils.merge_overlaps(dd.get_variant_regions(data), data)
         if regions:
             bed6_regions = _bed_to_bed6(regions, out_dir)
             cmd += " -gff {bed6_regions}"
@@ -549,49 +599,63 @@ def _parse_metrics(metrics):
 
     missing = set(["Genes Detected", "Transcripts Detected",
                    "Mean Per Base Cov."])
-    correct = set(["Intergenic pct", "Intronic pct", "Exonic pct"])
+    correct = set(["rRNA", "rRNA_rate"])
+    percentages = set(["Intergenic pct", "Intronic pct", "Exonic pct"])
     to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
-                      "Intronic pct": "Intronic Rate", "Exonic pct": "Exonic Rate",
-                      "Not aligned": 0, 'Aligned to genes': 0, 'Non-unique alignment': 0,
-                      "No feature assigned": 0, "Duplication Rate of Mapped": 1,
-                      "Fragment Length Mean": 1,
-                      "rRNA": 1, "Ambiguou alignment": 0})
+                      "Intronic pct": "Intronic Rate",
+                      "Exonic pct": "Exonic Rate",
+                      "Not aligned": 0, 'Aligned to genes': 0,
+                      'Non-unique alignment': 0, "No feature assigned": 0,
+                      "Duplication Rate of Mapped": 1, "Fragment Length Mean": 1,
+                      "Ambiguou alignment": 0})
     total = ["Not aligned", "Aligned to genes", "No feature assigned"]
 
     out = {}
     total_reads = sum([int(metrics[name]) for name in total])
-    out['rRNA rate'] = 1.0 * int(metrics["rRNA"]) / total_reads
     out['Mapped'] = sum([int(metrics[name]) for name in total[1:]])
     out['Mapping Rate'] = 1.0 * int(out['Mapped']) / total_reads
     [out.update({name: 0}) for name in missing]
-    [metrics.update({name: 1.0 * float(metrics[name]) / 100}) for name in correct]
+    out.update({key: val for key, val in metrics.iteritems() if key in correct})
+    [metrics.update({name: 1.0 * float(metrics[name]) / 100}) for name in
+     percentages]
 
     for name in to_change:
         if not to_change[name]:
             continue
-        if to_change[name] == 1:
-            out.update({name: float(metrics[name])})
-        else:
-            out.update({to_change[name]: float(metrics[name])})
+        try:
+            if to_change[name] == 1:
+                out.update({name: float(metrics[name])})
+            else:
+                out.update({to_change[name]: float(metrics[name])})
+        # if we can't convert metrics[name] to float (?'s or other non-floats)
+        except ValueError:
+            continue
     return out
 
-def _detect_duplicates(bam_file, out_dir, config):
+def _detect_duplicates(bam_file, out_dir, data):
     """
-    Detect duplicates metrics with Picard
+    count duplicate percentage
     """
-    out_file = os.path.join(out_dir, "dup_metrics")
+    out_file = os.path.join(out_dir, "dup_metrics.txt")
     if not utils.file_exists(out_file):
-        broad_runner = broad.runner_from_config(config)
-        (dup_align_bam, metrics_file) = broad_runner.run_fn("picard_mark_duplicates", bam_file, remove_dups=True)
-        shutil.move(metrics_file, out_file)
-    metrics = []
+        dup_align_bam = dedup_bam(bam_file, data)
+        num_cores = dd.get_num_cores(data)
+        with file_transaction(out_file) as tx_out_file:
+            sambamba = config_utils.get_program("sambamba", data, default="sambamba")
+            dup_count = ("{sambamba} view --nthreads {num_cores} --count "
+                         "-F 'duplicate and not unmapped' "
+                         "{bam_file} >> {tx_out_file}")
+            message = "Counting duplicates in {bam_file}.".format(bam_file=bam_file)
+            do.run(dup_count.format(**locals()), message)
+            tot_count = ("{sambamba} view --nthreads {num_cores} --count "
+                         "-F 'not unmapped' "
+                         "{bam_file} >> {tx_out_file}")
+            message = "Counting reads in {bam_file}.".format(bam_file=bam_file)
+            do.run(tot_count.format(**locals()), message)
     with open(out_file) as in_handle:
-        reader = csv.reader(in_handle, dialect="excel-tab")
-        for line in reader:
-            if line and not line[0].startswith("#"):
-                metrics.append(line)
-    metrics = dict(zip(metrics[0], metrics[1]))
-    return {"Duplication Rate of Mapped": metrics["PERCENT_DUPLICATION"]}
+        dupes = float(in_handle.next().strip())
+        total = float(in_handle.next().strip())
+    return {"Duplication Rate of Mapped": dupes / total}
 
 def _transform_browser_coor(rRNA_interval, rRNA_coor):
     """
@@ -604,41 +668,17 @@ def _transform_browser_coor(rRNA_interval, rRNA_coor):
                 if bio.startswith("rRNA"):
                     out_handle.write(("{0}:{1}-{2}\n").format(c, s, e))
 
-def _detect_rRNA(config, bam_file, rRNA_file, ref_file, out_dir, single_end):
-    """
-    Calculate rRNA with gatk-framework
-    """
-    if not utils.file_exists(rRNA_file):
-        return {'rRNA': 0}
-    out_file = os.path.join(out_dir, "rRNA.counts")
-    if not utils.file_exists(out_file):
-        out_file = _count_rRNA_reads(bam_file, out_file, ref_file, rRNA_file, single_end, config)
-    with open(out_file) as in_handle:
-        for line in in_handle:
-            if line.find("CountReads counted") > -1:
-                rRNA_reads = line.split()[6]
-                break
-    return {'rRNA': rRNA_reads}
-
-def _count_rRNA_reads(in_bam, out_file, ref_file, rRNA_interval, single_end, config):
-    """Use GATK counter to count reads in rRNA genes
-    """
-    bam.index(in_bam, config)
-    if not utils.file_exists(out_file):
-        with file_transaction(out_file) as tx_out_file:
-            rRNA_coor = os.path.join(os.path.dirname(out_file), "rRNA.list")
-            _transform_browser_coor(rRNA_interval, rRNA_coor)
-            params = ["-T", "CountReads",
-                      "-R", ref_file,
-                      "-I", in_bam,
-                      "-log", tx_out_file,
-                      "-L", rRNA_coor,
-                      "--filter_reads_with_N_cigar",
-                      "-allowPotentiallyMisencodedQuals"]
-            jvm_opts = broad.get_gatk_framework_opts(config)
-            cmd = [config_utils.get_program("gatk-framework", config)] + jvm_opts + params
-            do.run(cmd, "counts rRNA for %s" % in_bam)
-        return out_file
+def _detect_rRNA(data):
+    gtf_file = dd.get_gtf_file(data)
+    count_file = dd.get_count_file(data)
+    rrna_features = gtf.get_rRNA(gtf_file)
+    genes = [x[0] for x in rrna_features if x]
+    if not genes:
+        return {'rRNA': "NA", "rRNA_rate": "NA"}
+    count_table = pd.read_csv(count_file, sep="\t", names=["id", "counts"])
+    rrna = sum(count_table[count_table["id"].isin(genes)]["counts"])
+    rrna_rate = float(rrna) / sum(count_table["counts"])
+    return {'rRNA': str(rrna), 'rRNA_rate': str(rrna_rate)}
 
 def _parse_qualimap_rnaseq(table):
     """
@@ -682,8 +722,8 @@ def _rnaseq_qualimap(bam_file, data, out_dir):
         cmd = _rnaseq_qualimap_cmd(config, bam_file, out_dir, gtf_file, single_end)
         do.run(cmd, "Qualimap for {}".format(data["name"][-1]))
     metrics = _parse_rnaseq_qualimap_metrics(report_file)
-    metrics.update(_detect_duplicates(bam_file, out_dir, config))
-    metrics.update(_detect_rRNA(config, bam_file, gtf_file, ref_file, out_dir, single_end))
+    metrics.update(_detect_duplicates(bam_file, out_dir, data))
+    metrics.update(_detect_rRNA(data))
     metrics.update({"Fragment Length Mean": bam.estimate_fragment_size(bam_file)})
     metrics = _parse_metrics(metrics)
     return metrics
@@ -725,6 +765,17 @@ def _parse_bamtools_stats(stats_file):
                         out["%s pct" % metric] = pct
     return out
 
+def _parse_offtargets(bam_file):
+    """
+    Add to metrics off-targets reads if it exitst
+    """
+    off_target = bam_file.replace(".bam", "-offtarget-stats.yaml")
+    if os.path.exists(off_target):
+        res = yaml.load(open(off_target))
+        res['offtarget_pct'] = "%.3f" % (float(res['offtarget']) / float(res['mapped']))
+        return res
+    return {}
+
 def _run_bamtools_stats(bam_file, data, out_dir):
     """Run bamtools stats with reports on mapped reads, duplicates and insert sizes.
     """
@@ -738,7 +789,9 @@ def _run_bamtools_stats(bam_file, data, out_dir):
                 cmd += " -insert"
             cmd += " > {tx_out_file}"
             do.run(cmd.format(**locals()), "bamtools stats", data)
-    return _parse_bamtools_stats(stats_file)
+    out = _parse_bamtools_stats(stats_file)
+    out.update(_parse_offtargets(bam_file))
+    return out
 
 ## Variant statistics from gemini
 
@@ -760,12 +813,13 @@ def _run_gemini_stats(bam_file, data, out_dir):
             out["Transition/Transversion"] = tstv.split("\n")[1].split()[-1]
             for line in gt_counts.split("\n"):
                 parts = line.rstrip().split()
-                if len(parts) > 0 and parts[0] == data["name"][-1]:
-                    _, hom_ref, het, hom_var, _, total = parts
+                if len(parts) > 0 and parts[0] != "sample":
+                    name, hom_ref, het, hom_var, _, total = parts
+                    out[name] = {}
+                    out[name]["Variations (heterozygous)"] = int(het)
+                    out[name]["Variations (homozygous)"] = int(hom_var)
+                    # same total variations for all samples, keep that top level as well.
                     out["Variations (total)"] = int(total)
-                    out["Variations (heterozygous)"] = int(het)
-                    out["Variations (homozygous)"] = int(hom_var)
-                    break
             out["Variations (in dbSNP)"] = int(dbsnp_count.strip())
             if out.get("Variations (total)") > 0:
                 out["Variations (in dbSNP) pct"] = "%.1f%%" % (out["Variations (in dbSNP)"] /
@@ -775,8 +829,14 @@ def _run_gemini_stats(bam_file, data, out_dir):
         else:
             with open(gemini_stat_file) as in_handle:
                 out = yaml.safe_load(in_handle)
-    return out
 
+    res = {}
+    for k, v in out.iteritems():
+        if not isinstance(v, dict):
+            res.update({k: v})
+        if k == data['name'][-1]:
+            res.update(v)
+    return res
 
 ## qsignature
 
@@ -832,7 +892,6 @@ def _run_qsignature_generator(bam_file, data, out_dir):
         return {'qsig_vcf': out_file}
     return {}
 
-
 def qsignature_summary(*samples):
     """Run SignatureCompareRelatedSimple module from qsignature tool.
 
@@ -881,7 +940,6 @@ def qsignature_summary(*samples):
     else:
         return []
 
-
 def _parse_qsignature_output(in_file, out_file, warning_file, data):
     """ Parse xml file produced by qsignature
 
@@ -925,7 +983,6 @@ def _parse_qsignature_output(in_file, out_file, warning_file, data):
                                 warn_handle.write(msg % pair)
     return error, warnings, similar
 
-
 def _slice_chr22(in_bam, data):
     """
     return only one BAM file with only chromosome 22
@@ -943,3 +1000,133 @@ def _slice_chr22(in_bam, data):
             cmd = ("{sambamba} slice -o {tx_out_file} {in_bam} {chromosome}").format(**locals())
             out = subprocess.check_output(cmd, shell=True)
     return out_file
+
+## report and coverage
+def report_summary(samples, run_parallel):
+    """
+    Run coverage report with bcbiocov package
+    """
+    work_dir = dd.get_work_dir(samples[0][0])
+
+    parent_dir = utils.safe_makedir(os.path.join(work_dir, "report"))
+    qsignature_fn = os.path.join(work_dir, "qc", "qsignature", "qsignature.ma")
+    with utils.chdir(parent_dir):
+
+        logger.info("copy qsignature")
+        if qsignature_fn:
+            if utils.file_exists(qsignature_fn) and not utils.file_exists("qsignature.ma"):
+                shutil.copy(qsignature_fn, "qsignature.ma")
+
+        out_dir = utils.safe_makedir("fastqc")
+        logger.info("summarize fastqc")
+        with utils.chdir(out_dir):
+            _merge_fastqc(samples)
+
+        out_dir = utils.safe_makedir("coverage")
+        out_dir = utils.safe_makedir("variants")
+        samples = run_parallel("coverage_report", samples)
+
+        try:
+            import bcbreport.prepare as bcbreport
+            bcbreport.report(parent_dir)
+        except:
+            logger.info("skipping report. No bcbreport installed.")
+            pass
+
+        logger.info("summarize metrics")
+        samples = _merge_metrics(samples)
+
+    return samples
+
+def coverage_report(data):
+    """
+    Run heavy coverage and variants process in parallel
+    """
+    data = cov.coverage(data)
+    data = cov.variants(data)
+    data = cov.priority_coverage(data)
+    data = cov.priority_total_coverage(data)
+    problem_regions = dd.get_problem_region_dir(data)
+    name = dd.get_sample_name(data)
+    if "coverage" in data:
+        coverage = data['coverage']
+        annotated = None
+        if problem_regions and coverage:
+             annotated = decorate_problem_regions(coverage, problem_regions)
+        data['coverage'] = {'all': coverage, 'problems': annotated}
+
+    return [[data]]
+
+def _get_coverage_per_region(name):
+    """
+    Parse coverage file if it exists to get average value.
+    """
+    fn = os.path.join("coverage", name + "_coverage.bed")
+    if utils.file_exists(fn):
+        try:
+            dt = pd.read_csv(fn, sep="\t", index_col=False)
+            if len(dt["meanCoverage"]) > 0:
+                return "%.3f" % (sum(map(float, dt['meanCoverage'])) / len(dt['meanCoverage']))
+        except TypeError:
+            logger.debug("%s has no lines in coverage.bed" % name)
+    return "NA"
+
+def _merge_metrics(samples):
+    """
+    parse project.yaml file to get metrics for each bam
+    """
+    out_file = os.path.join("metrics", "metrics.tsv")
+    dt_together = []
+    cov = {}
+    with file_transaction(out_file) as out_tx:
+        for s in samples:
+            s = s[0]
+            if s['description'] in cov:
+                continue
+            m = tz.get_in(['summary', 'metrics'], s)
+            if m:
+                for me in m:
+                    if isinstance(m[me], list):
+                        m[me] = ":".join(m[me])
+                dt = pd.DataFrame(m, index=['1'])
+                dt['avg_coverage_per_region'] = _get_coverage_per_region(s['description'])
+                cov[s['description']] = dt['avg_coverage_per_region'][0]
+                # dt = pd.DataFrame.from_dict(m)
+                dt.columns = [k.replace(" ", "_").replace("(", "").replace(")", "") for k in dt.columns]
+                dt['sample'] = s['description']
+                dt_together.append(dt)
+        if len(dt_together) > 0:
+            dt_together = utils.rbind(dt_together)
+            dt_together.to_csv(out_tx, index=False, sep="\t")
+
+    for i, s in enumerate(samples):
+        if s[0]['description'] in cov:
+            samples[i][0]['summary']['metrics']['avg_coverage_per_region'] = cov[s[0]['description']]
+    return samples
+
+def _merge_fastqc(data):
+    """
+    merge all fastqc samples into one by module
+    """
+    fastqc_list = defaultdict(list)
+    seen = set()
+    for sample in data:
+        name = dd.get_sample_name(sample[0])
+        if name in seen:
+            continue
+        seen.add(name)
+        fns = glob.glob(os.path.join(dd.get_work_dir(sample[0]), "qc", dd.get_sample_name(sample[0]), "fastqc") + "/*")
+        for fn in fns:
+            if fn.endswith("tsv"):
+                metric = os.path.basename(fn)
+                fastqc_list[metric].append([name, fn])
+
+    for metric in fastqc_list:
+        dt_by_sample = []
+        for fn in fastqc_list[metric]:
+            dt = pd.read_csv(fn[1], sep="\t")
+            dt['sample'] = fn[0]
+            dt_by_sample.append(dt)
+        dt = utils.rbind(dt_by_sample)
+        dt.to_csv(metric, sep="\t", index=False, mode = 'w')
+    return [data]

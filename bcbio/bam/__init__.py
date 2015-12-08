@@ -14,7 +14,9 @@ from bcbio import utils
 from bcbio.bam import ref
 from bcbio.distributed import objectstore
 from bcbio.distributed.transaction import file_transaction
+from bcbio.log import logger
 from bcbio.pipeline import config_utils
+import bcbio.pipeline.datadict as dd
 from bcbio.provenance import do
 
 def is_paired(bam_file):
@@ -28,7 +30,7 @@ def is_paired(bam_file):
                                   stderr=open("/dev/null", "w"))
     return int(out) > 0
 
-def index(in_bam, config):
+def index(in_bam, config, check_timestamp=True):
     """Index a BAM file, skipping if index present.
 
     Centralizes BAM indexing providing ability to switch indexing approaches.
@@ -36,8 +38,11 @@ def index(in_bam, config):
     assert is_bam(in_bam), "%s in not a BAM file" % in_bam
     index_file = "%s.bai" % in_bam
     alt_index_file = "%s.bai" % os.path.splitext(in_bam)[0]
-    if (not utils.file_uptodate(index_file, in_bam) and
-          not utils.file_uptodate(alt_index_file, in_bam)):
+    if check_timestamp:
+        bai_exists = utils.file_uptodate(index_file, in_bam) or utils.file_uptodate(alt_index_file, in_bam)
+    else:
+        bai_exists = utils.file_exists(index_file) or utils.file_exists(alt_index_file)
+    if not bai_exists:
         # Remove old index files and re-run to prevent linking into tx directory
         for fname in [index_file, alt_index_file]:
             utils.remove_safe(fname)
@@ -53,7 +58,16 @@ def index(in_bam, config):
             else:
                 cmd = "{samtools} index {tx_bam_file}"
             do.run(cmd.format(**locals()), "Index BAM file: %s" % os.path.basename(in_bam))
-    return index_file if utils.file_uptodate(index_file, in_bam) else alt_index_file
+    return index_file if utils.file_exists(index_file) else alt_index_file
+
+def remove(in_bam):
+    """
+    remove bam file and the index if exists
+    """
+    if utils.file_exists(in_bam):
+        utils.remove_safe(in_bam)
+    if utils.file_exists(in_bam + ".bai"):
+        utils.remove_safe(in_bam + ".bai")
 
 def idxstats(in_bam, data):
     """Return BAM index stats for the given file, using samtools idxstats.
@@ -102,7 +116,7 @@ def downsample(in_bam, data, target_counts, read_filter="", always_run=False,
         if not utils.file_exists(out_file):
             with file_transaction(data, out_file) as tx_out_file:
                 sambamba = config_utils.get_program("sambamba", data["config"])
-                num_cores = data["config"]["algorithm"].get("num_cores", 1)
+                num_cores = dd.get_num_cores(data)
                 cmd = ("{sambamba} view -t {num_cores} {read_filter} -f bam -o {tx_out_file} "
                        "--subsample={ds_pct:.3} --subsampling-seed=42 {in_bam}")
                 do.run(cmd.format(**locals()), "Downsample BAM file: %s" % os.path.basename(in_bam))
@@ -120,8 +134,9 @@ def _check_sample(in_bam, rgnames):
     with contextlib.closing(pysam.Samfile(in_bam, "rb")) as bamfile:
         rg = bamfile.header.get("RG", [{}])
     msgs = []
+    warnings = []
     if len(rg) > 1:
-        msgs.append("Multiple read groups found in input BAM. Expect single RG per BAM.")
+        warnings.append("Multiple read groups found in input BAM. Expect single RG per BAM.")
     elif len(rg) == 0:
         msgs.append("No read groups found in input BAM. Expect single RG per BAM.")
     elif rg[0].get("SM") != rgnames["sample"]:
@@ -131,6 +146,9 @@ def _check_sample(in_bam, rgnames):
         raise ValueError("Problems with pre-aligned input BAM file: %s\n" % (in_bam)
                          + "\n".join(msgs) +
                          "\nSetting `bam_clean: picard` in the configuration can often fix this issue.")
+    if warnings:
+        print("*** Potential problems in input BAM compared to reference:\n%s\n" %
+              "\n".join(warnings))
 
 def _check_bam_contigs(in_bam, ref_file, config):
     """Ensure a pre-aligned BAM file matches the expected reference genome.
@@ -145,7 +163,7 @@ def _check_bam_contigs(in_bam, ref_file, config):
             if bc and rc:
                 problems.append("Reference mismatch. BAM: %s Reference: %s" % (bc, rc))
             elif bc:
-                problems.append("Extra BAM chromosomes: %s" % bc)
+                warnings.append("Extra BAM chromosomes: %s" % bc)
             elif rc:
                 warnings.append("Extra reference chromosomes: %s" % rc)
     if problems:
@@ -313,18 +331,25 @@ def sort(in_bam, config, order="coordinate"):
     if not utils.file_exists(sort_file):
         sambamba = _get_sambamba(config)
         samtools = config_utils.get_program("samtools", config)
-        num_cores = config["algorithm"].get("num_cores", 1)
+        cores = config["algorithm"].get("num_cores", 1)
         with file_transaction(config, sort_file) as tx_sort_file:
             tx_sort_stem = os.path.splitext(tx_sort_file)[0]
             tx_dir = utils.safe_makedir(os.path.dirname(tx_sort_file))
-            order_flag = "-n" if order is "queryname" else ""
-            samtools_cmd = ("{samtools} sort {order_flag} "
+            order_flag = "-n" if order == "queryname" else ""
+            resources = config_utils.get_resources("samtools", config)
+            mem = resources.get("memory", "2G")
+            samtools_cmd = ("{samtools} sort -@ {cores} -m {mem} {order_flag} "
                             "{in_bam} {tx_sort_stem}")
             if sambamba:
+                if tz.get_in(["resources", "sambamba"], config):
+                    sm_resources = config_utils.get_resources("sambamba", config)
+                    mem = sm_resources.get("memory", "2G")
+                # sambamba uses total memory, not memory per core
+                mem = config_utils.adjust_memory(mem, cores, "increase").upper()
                 # Use samtools compatible natural sorting
                 # https://github.com/lomereiter/sambamba/issues/132
-                order_flag = "--natural-sort" if order is "queryname" else ""
-                cmd = ("{sambamba} sort -t {num_cores} {order_flag} "
+                order_flag = "--natural-sort" if order == "queryname" else ""
+                cmd = ("{sambamba} sort -t {cores} -m {mem} {order_flag} "
                        "-o {tx_sort_file} --tmpdir={tx_dir} {in_bam}")
             else:
                 cmd = samtools_cmd
@@ -334,10 +359,12 @@ def sort(in_bam, config, order="coordinate"):
                 do.run(cmd.format(**locals()),
                        "Sort BAM file (multi core, %s): %s to %s" %
                        (order, os.path.basename(in_bam),
-                        os.path.basename(sort_file)), log_error=False)
+                        os.path.basename(sort_file)))
             except:
+                logger.exception("Multi-core sorting failed, reverting to single core")
+                order_flag = "-n" if order == "queryname" else ""
                 do.run(samtools_cmd.format(**locals()),
-                       "Sort BAM file (single core, %s): %s" %
+                       "Sort BAM file (single core, %s): %s to %s" %
                        (order, os.path.basename(in_bam),
                         os.path.basename(sort_file)))
     return sort_file
@@ -347,7 +374,7 @@ def sort_cmd(config, tmp_dir, named_pipe=None, order="coordinate"):
     """
     sambamba = _get_sambamba(config)
     pipe = named_pipe if named_pipe else "/dev/stdin"
-    order_flag = "-n" if order is "queryname" else ""
+    order_flag = "-n" if order == "queryname" else ""
     resources = config_utils.get_resources("samtools", config)
     num_cores = config["algorithm"].get("num_cores", 1)
     mem = config_utils.adjust_memory(resources.get("memory", "2G"), 1, "decrease").upper()
@@ -381,9 +408,12 @@ def _get_sort_stem(in_bam, order):
 def sample_name(in_bam):
     """Get sample name from BAM file.
     """
-    with contextlib.closing(pysam.Samfile(in_bam, "rb")) as in_pysam:
-        if "RG" in in_pysam.header:
-            return in_pysam.header["RG"][0]["SM"]
+    with contextlib.closing(pysam.AlignmentFile(in_bam, "rb", check_sq=False)) as in_pysam:
+        try:
+            if "RG" in in_pysam.header:
+                return in_pysam.header["RG"][0]["SM"]
+        except ValueError:
+            return None
 
 def estimate_read_length(bam_file, nreads=1000):
     """
@@ -402,3 +432,28 @@ def estimate_fragment_size(bam_file, nreads=1000):
         reads = tz.itertoolz.take(nreads, bam_handle)
         lengths = [x.tlen for x in reads]
     return int(numpy.median(lengths))
+
+def filter_stream_cmd(bam_file, data, filter_flag):
+    """
+    return a command to keep only alignments matching the filter flag
+    see https://github.com/lomereiter/sambamba/wiki/%5Bsambamba-view%5D-Filter-expression-syntax for examples
+    """
+    sambamba = config_utils.get_program("sambamba", data["config"])
+    num_cores = dd.get_num_cores(data)
+    cmd = ('{sambamba} view -t {num_cores} -f bam -F "{filter_flag}" {bam_file}')
+    return cmd.format(**locals())
+
+def filter_primary_stream_cmd(bam_file, data):
+    return filter_stream_cmd(bam_file, data, "not secondary_alignment")
+
+def filter_primary(bam_file, data):
+    stem, ext = os.path.splitext(bam_file)
+    out_file = stem + ".primary" + ext
+    if utils.file_exists(out_file):
+        return out_file
+    with file_transaction(out_file) as tx_out_file:
+        cmd = filter_primary_stream_cmd(bam_file, data)
+        cmd += "> {tx_out_file}"
+        do.run(cmd.format(**locals()), ("Filtering primary alignments in %s." %
+                                        os.path.basename(bam_file)))
+    return out_file

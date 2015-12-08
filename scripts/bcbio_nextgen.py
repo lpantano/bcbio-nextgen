@@ -30,7 +30,7 @@ import os
 import argparse
 import sys
 
-from bcbio import install, workflow
+from bcbio import install, utils, workflow
 from bcbio.illumina import machine
 from bcbio.distributed import runfn, clargs
 from bcbio.pipeline.main import run_main
@@ -107,7 +107,11 @@ def parse_cl_args(in_args):
                                   "current working directory"))
         parser.add_argument("-v", "--version", help="Print current version",
                             action="store_true")
+        # Hidden arguments passed downstream
+        parser.add_argument("--only-metadata", help=argparse.SUPPRESS, action="store_true", default=False)
     args = parser.parse_args(in_args)
+    if hasattr(args, "workdir"):
+        args.workdir = utils.safe_makedir(os.path.abspath(args.workdir))
     if hasattr(args, "global_config"):
         error_msg = _sanity_check_args(args)
         if error_msg:
@@ -154,7 +158,12 @@ def _add_inputs_to_kwargs(args, kwargs, parser):
     inputs = [x for x in [args.global_config, args.fc_dir] + args.run_config
               if x is not None]
     global_config = "bcbio_system.yaml"  # default configuration if not specified
-    if len(inputs) == 1:
+    if kwargs.get("workflow", "") == "template":
+        if args.only_metadata:
+            inputs.append("--only-metadata")
+        kwargs["inputs"] = inputs
+        return kwargs
+    elif len(inputs) == 1:
         if os.path.isfile(inputs[0]):
             fc_dir = None
             run_info_yaml = inputs[0]
@@ -174,9 +183,6 @@ def _add_inputs_to_kwargs(args, kwargs, parser):
             fc_dir, run_info_yaml = inputs
     elif len(inputs) == 3:
         global_config, fc_dir, run_info_yaml = inputs
-    elif kwargs.get("workflow", "") == "template":
-        kwargs["inputs"] = inputs
-        return kwargs
     elif args.version:
         print version.__version__
         sys.exit()

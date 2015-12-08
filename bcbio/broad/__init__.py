@@ -115,7 +115,7 @@ def get_mutect_version(mutect_jar):
         version = version.replace(to_remove, "")
     if version.startswith(("-", ".")):
         version = version[1:]
-    if version is "":
+    if not version:
         raise ValueError("Unable to determine MuTect version from jar file. "
                          "Need to have version contained in jar (ie. muTect-1.1.5.jar): %s" % mutect_jar)
     _check_for_bad_version(version, "MuTect")
@@ -264,7 +264,7 @@ class BroadRunner:
     def cl_mutect(self, params, tmp_dir):
         """Define parameters to run the mutect paired algorithm.
         """
-        gatk_jar = self._get_jar("muTect")
+        gatk_jar = self._get_jar("muTect", ["mutect"])
         # Decrease memory slightly from configuration to avoid memory allocation errors
         jvm_opts = config_utils.adjust_opts(self._jvm_opts,
                                             {"algorithm": {"memory_adjust":
@@ -310,7 +310,7 @@ class BroadRunner:
         """Retrieve the Mutect version.
         """
         if self._mutect_version is None:
-            mutect_jar = self._get_jar("muTect")
+            mutect_jar = self._get_jar("muTect", ["mutect"])
             self._mutect_version = get_mutect_version(mutect_jar)
         return self._mutect_version
 
@@ -374,7 +374,7 @@ class BroadRunner:
         for check_cmd in [command] + alts:
             for dir_check in dirs:
                 try:
-                    check_file = config_utils.get_jar(command, dir_check)
+                    check_file = config_utils.get_jar(check_cmd, dir_check)
                     return check_file
                 except ValueError, msg:
                     if str(msg).find("multiple") > 0:
@@ -410,3 +410,14 @@ def runner_from_config(config, program="gatk"):
     return BroadRunner(_get_picard_ref(config),
                        config_utils.get_program(program, config, "dir"),
                        config)
+
+def runner_from_config_safe(config):
+    """Retrieve a runner, returning None if GATK is not available.
+    """
+    try:
+        return runner_from_config(config)
+    except ValueError, msg:
+        if str(msg).find("Could not find directory in config for gatk") >= 0:
+            return None
+        else:
+            raise

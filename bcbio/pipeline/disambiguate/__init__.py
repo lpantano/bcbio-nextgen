@@ -27,8 +27,9 @@ def split(*items):
     for data in [x[0] for x in items]:
         dis_orgs = data["config"]["algorithm"].get("disambiguate")
         if dis_orgs:
-            data["disambiguate"] = {"genome_build": data["genome_build"],
-                                    "base": True}
+            if not data.get("disambiguate", None):
+                data["disambiguate"] = {"genome_build": data["genome_build"],
+                                        "base": True}
             out.append([data])
             # handle the instance where a single organism is disambiguated
             if isinstance(dis_orgs, basestring):
@@ -57,12 +58,14 @@ def resolve(items, run_parallel):
     if len(to_process) > 0:
         dis1 = run_parallel("run_disambiguate",
                             [(xs, xs[0]["config"]) for xs in to_process.itervalues()])
-        disambigs = []
+        disambigs_by_name = collections.defaultdict(list)
+        print len(dis1)
         for xs in dis1:
             assert len(xs) == 1
-            disambigs.append(xs[0])
+            data = xs[0]
+            disambigs_by_name[dd.get_sample_name(data)].append(data)
         dis2 = run_parallel("disambiguate_merge_extras",
-                            [[disambigs, disambigs[0]["config"]]])
+                            [(xs, xs[0]["config"]) for xs in disambigs_by_name.itervalues()])
     else:
         dis2 = []
     return out + dis2
@@ -72,26 +75,21 @@ def merge_extras(items, config):
     """
     final = {}
     for extra_name in items[0]["disambiguate"].keys():
-        items_by_name = collections.defaultdict(list)
+        in_files = []
         for data in items:
-            items_by_name[dd.get_sample_name(data)].append(data)
-        for sname, name_items in items_by_name.items():
-            if sname not in final:
-                final[sname] = {}
-            in_files = []
-            for data in name_items:
-                in_files.append(data["disambiguate"][extra_name])
-            out_file = "%s-allmerged%s" % os.path.splitext(in_files[0])
-            if in_files[0].endswith(".bam"):
-                merged_file = merge.merge_bam_files(in_files, os.path.dirname(out_file), config,
-                                                    out_file=out_file)
-            else:
-                assert extra_name == "summary", extra_name
-                merged_file = _merge_summary(in_files, out_file, name_items[0])
-            final[sname][extra_name] = merged_file
+            in_files.append(data["disambiguate"][extra_name])
+        out_file = "%s-allmerged%s" % os.path.splitext(in_files[0])
+        if in_files[0].endswith(".bam"):
+            print out_file, in_files
+            merged_file = merge.merge_bam_files(in_files, os.path.dirname(out_file), config,
+                                                out_file=out_file)
+        else:
+            assert extra_name == "summary", extra_name
+            merged_file = _merge_summary(in_files, out_file, items[0])
+        final[extra_name] = merged_file
     out = []
     for data in items:
-        data["disambiguate"] = final[dd.get_sample_name(data)]
+        data["disambiguate"] = final
         out.append([data])
     return out
 
@@ -118,7 +116,7 @@ def run(items, config):
     # check aligner, handling tophat/tophat2 distinctions
     aligner = config["algorithm"].get("aligner")
     aligner = "tophat" if aligner.startswith("tophat") else aligner
-    assert aligner in ["bwa", "tophat", "star"], "Disambiguation only supported for bwa, star and tophat alignments."
+    assert aligner in ["bwa", "hisat2", "tophat", "star"], "Disambiguation only supported for bwa, hisat2, star and tophat alignments."
     if items[0]["disambiguate"].get("base"):
         data_a, data_b = items
     else:
@@ -157,7 +155,7 @@ def run_cplusplus(items, config):
     # check aligner, handling tophat/tophat2 distinctions
     aligner = config["algorithm"].get("aligner")
     aligner = "tophat" if aligner.startswith("tophat") else aligner
-    assert aligner in ["bwa", "tophat", "star"], "Disambiguation only supported for bwa, star and tophat alignments."
+    assert aligner in ["bwa", "hisat2", "tophat", "star"], "Disambiguation only supported for bwa, hisat2, star and tophat alignments."
     if items[0]["disambiguate"].get("base"):
         data_a, data_b = items
     else:

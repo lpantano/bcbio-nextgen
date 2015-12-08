@@ -14,6 +14,14 @@ _approaches = {"filesystem": filesystem,
                "galaxy": galaxy,
                "s3": s3}
 
+def project_from_sample(sample):
+    upload_config = sample.get("upload")
+    if upload_config:
+        approach = _approaches[upload_config.get("method", "filesystem")]
+        for finfo in _get_files_project(sample, upload_config):
+            approach.update_file(finfo, None, upload_config)
+    return [[sample]]
+
 def from_sample(sample):
     """Upload results of processing from an analysis pipeline sample.
     """
@@ -22,8 +30,6 @@ def from_sample(sample):
         approach = _approaches[upload_config.get("method", "filesystem")]
         for finfo in _get_files(sample):
             approach.update_file(finfo, sample, upload_config)
-        for finfo in _get_files_project(sample, upload_config):
-            approach.update_file(finfo, None, upload_config)
     return [[sample]]
 
 # ## File information from sample
@@ -39,30 +45,34 @@ def _get_files(sample):
         return _get_files_variantcall(sample)
     elif analysis in ["RNA-seq"]:
         return _get_files_rnaseq(sample)
+    elif analysis.lower() in ["smallrna-seq"]:
+        return _get_files_srnaseq(sample)
     elif analysis.lower() in ["chip-seq"]:
         return _get_files_chipseq(sample)
-    elif analysis.lower() in ["sailfish"]:
-        return _get_files_sailfish(sample)
     else:
         return []
 
-def _get_files_sailfish(sample):
-    out = []
-    out.append({"path": sample["sailfish_dir"],
-                "type": "directory",
-                "ext": "sailfish"})
-    return _add_meta(out, sample)
 
 def _get_files_rnaseq(sample):
     out = []
     algorithm = sample["config"]["algorithm"]
     out = _maybe_add_summary(algorithm, sample, out)
     out = _maybe_add_alignment(algorithm, sample, out)
+    out = _maybe_add_transcriptome_alignment(sample, out)
     out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_counts(algorithm, sample, out)
     out = _maybe_add_cufflinks(algorithm, sample, out)
     out = _maybe_add_oncofuse(algorithm, sample, out)
     out = _maybe_add_rnaseq_variant_file(algorithm, sample, out)
+    out = _maybe_add_sailfish_files(algorithm, sample, out)
+    return _add_meta(out, sample)
+
+def _get_files_srnaseq(sample):
+    out = []
+    algorithm = sample["config"]["algorithm"]
+    out = _maybe_add_summary(algorithm, sample, out)
+    out = _maybe_add_trimming(algorithm, sample, out)
+    out = _maybe_add_seqbuster(algorithm, sample, out)
     return _add_meta(out, sample)
 
 def _get_files_chipseq(sample):
@@ -101,6 +111,8 @@ def _get_files_variantcall(sample):
     out = _maybe_add_disambiguate(algorithm, sample, out)
     out = _maybe_add_variant_file(algorithm, sample, out)
     out = _maybe_add_sv(algorithm, sample, out)
+    out = _maybe_add_hla(algorithm, sample, out)
+    out = _maybe_add_heterogeneity(algorithm, sample, out)
     out = _maybe_add_validate(algorithm, sample, out)
     return _add_meta(out, sample)
 
@@ -137,36 +149,32 @@ def _maybe_add_variant_file(algorithm, sample, out):
                                 "variantcaller": x["variantcaller"]})
     return out
 
+def _maybe_add_hla(algorithm, sample, out):
+    if sample.get("align_bam") is not None and sample.get("hla"):
+        out.append({"path": sample["hla"]["call_file"],
+                    "type": "csv",
+                    "ext": "hla-%s" % (sample["hla"]["hlacaller"])})
+    return out
+
+def _maybe_add_heterogeneity(algorithm, sample, out):
+    for hetinfo in sample.get("heterogeneity", []):
+        report = hetinfo.get("report")
+        if report:
+            out.append({"path": report,
+                        "type": utils.splitext_plus(report)[-1].replace(".", "").replace("-", ""),
+                        "ext": "%s-report" % (hetinfo["caller"])})
+        for plot_type, plot_file in hetinfo.get("plots", {}).items():
+            out.append({"path": plot_file,
+                        "type": utils.splitext_plus(plot_file)[-1].replace(".", ""),
+                        "ext": "%s-%s-plot" % (hetinfo["caller"], plot_type)})
+    return out
+
 def _maybe_add_sv(algorithm, sample, out):
     if sample.get("align_bam") is not None and sample.get("sv"):
         for svcall in sample["sv"]:
-            out.extend(_get_variant_file(svcall, ("vrn_file",)))
-            out.extend(_get_variant_file(svcall, ("bedpe_file",)))
-            out.extend(_get_variant_file(svcall, ("cnr",)))
-            out.extend(_get_variant_file(svcall, ("cns",)))
-            out.extend(_get_variant_file(svcall, ("cnr_bed",)))
-            out.extend(_get_variant_file(svcall, ("cnr_bedgraph",)))
-            if "sample_bed" in svcall:
-                out.append({"path": svcall["sample_bed"],
-                            "type": "bed",
-                            "ext": "%s-sample" % svcall["variantcaller"],
-                            "variantcaller": svcall["variantcaller"]})
-            if "validate" in svcall:
-                for vkey in ["csv", "plot", "df"]:
-                    vfile = tz.get_in(["validate", vkey], svcall)
-                    if vfile:
-                        to_u = []
-                        if isinstance(vfile, dict):
-                            for svtype, fname in vfile.items():
-                                to_u.append((fname, "-%s" % svtype))
-                        else:
-                            to_u.append((vfile, "-%s" % vkey if vkey in ["df"] else ""))
-                        for vfile, ext in to_u:
-                            vext = os.path.splitext(vfile)[-1].replace(".", "")
-                            out.append({"path": vfile,
-                                        "type": vext,
-                                        "ext": "%s-sv-validate%s" % (svcall["variantcaller"], ext),
-                                        "variantcaller": svcall["variantcaller"]})
+            for key in ["vrn_file", "cnr", "cns", "cnr_bed", "cnr_bedgraph", "seg",
+                        "gainloss", "segmetrics", "vrn_bed", "vrn_bedpe"]:
+                out.extend(_get_variant_file(svcall, (key,)))
             if "plot" in svcall:
                 for plot_name, fname in svcall["plot"].items():
                     ext = os.path.splitext(fname)[-1].replace(".", "")
@@ -174,6 +182,21 @@ def _maybe_add_sv(algorithm, sample, out):
                                 "type": ext,
                                 "ext": "%s-%s" % (svcall["variantcaller"], plot_name),
                                 "variantcaller": svcall["variantcaller"]})
+        if "sv-validate" in sample:
+            for vkey in ["csv", "plot", "df"]:
+                vfile = tz.get_in(["sv-validate", vkey], sample)
+                if vfile:
+                    to_u = []
+                    if isinstance(vfile, dict):
+                        for svtype, fname in vfile.items():
+                            to_u.append((fname, "-%s" % svtype))
+                    else:
+                        to_u.append((vfile, "-%s" % vkey if vkey in ["df"] else ""))
+                    for vfile, ext in to_u:
+                        vext = os.path.splitext(vfile)[-1].replace(".", "")
+                        out.append({"path": vfile,
+                                    "type": vext,
+                                    "ext": "sv-validate%s" % ext})
     return out
 
 def _get_variant_file(x, key):
@@ -196,12 +219,21 @@ def _get_variant_file(x, key):
                             "index": True,
                             "ext": x["variantcaller"],
                             "variantcaller": x["variantcaller"]})
-        elif fname.endswith((".vcf", ".bed", ".bedpe", ".bedgraph", ".cnr", ".cns", ".cnn")):
+        elif fname.endswith((".vcf", ".bed", ".bedpe", ".bedgraph", ".cnr", ".cns", ".cnn", ".txt", ".tsv")):
             ftype = utils.splitext_plus(fname)[-1][1:]
+            if ftype == "txt":
+                ftype = fname.split("-")[-1]
             out.append({"path": fname,
                         "type": ftype,
                         "ext": x["variantcaller"],
                         "variantcaller": x["variantcaller"]})
+    return out
+
+def _maybe_add_sailfish_files(algorithm, sample, out):
+    if dd.get_sailfish_dir(sample):
+        out.append({"path": dd.get_sailfish_dir(sample),
+                    "type": "directory",
+                    "ext": os.path.join("sailfish", dd.get_sample_name(sample))})
     return out
 
 def _maybe_add_summary(algorithm, sample, out):
@@ -264,6 +296,14 @@ def _maybe_add_disambiguate(algorithm, sample, out):
                                 "ext": "disambiguate-%s" % extra_name})
     return out
 
+def _maybe_add_transcriptome_alignment(sample, out):
+    transcriptome_bam = dd.get_transcriptome_bam(sample)
+    if transcriptome_bam and utils.file_exists(transcriptome_bam):
+        out.append({"path": transcriptome_bam,
+                    "type": "bam",
+                    "ext": "transcriptome"})
+    return out
+
 def _maybe_add_counts(algorithm, sample, out):
     out.append({"path": sample["count_file"],
                 "type": "counts",
@@ -288,6 +328,22 @@ def _maybe_add_cufflinks(algorithm, sample, out):
                     "type": "directory",
                     "ext": "cufflinks"})
     return out
+
+def _maybe_add_trimming(algorithm, sample, out):
+    fn = sample["collapse"] + "_size_stats"
+    if utils.file_exists(fn):
+        out.append({"path": fn,
+                    "type": "trimming_stats",
+                    "ext": "ready"})
+        return out
+
+def _maybe_add_seqbuster(algorithm, sample, out):
+    fn = sample["seqbuster"]
+    if utils.file_exists(fn):
+        out.append({"path": fn,
+                    "type": "counts",
+                    "ext": "ready"})
+        return out
 
 def _has_alignment_file(algorithm, sample):
     return (((algorithm.get("aligner") or algorithm.get("realign")
@@ -315,6 +371,15 @@ def _get_files_project(sample, upload_config):
         out.append({"path": sample["summary"]["mixup_check"],
                     "type": "directory", "ext": "mixup_check"})
 
+    report = os.path.join(dd.get_work_dir(sample), "report")
+    if utils.file_exists(report):
+        out.append({"path": report,
+            "type": "directory", "ext": "report"})
+
+    if sample.get("seqcluster", None):
+        out.append({"path": sample["seqcluster"],
+                    "type": "directory", "ext": "seqcluster"})
+
     for x in sample.get("variants", []):
         if "pop_db" in x:
             out.append({"path": x["pop_db"],
@@ -336,11 +401,14 @@ def _get_files_project(sample, upload_config):
         cov_db = tz.get_in(["coverage", "summary"], sample)
         if cov_db:
             out.append({"path": cov_db, "type": "sqlite", "ext": "coverage"})
-        incomplete = tz.get_in(["coverage", "incomplete"], sample)
-        if incomplete:
-            out.append({"path": incomplete, "type": "bed", "ext": "coverage"})
+        all_coverage = tz.get_in(["coverage", "all"], sample)
+        if all_coverage:
+            out.append({"path": all_coverage, "type": "bed", "ext": "coverage"})
 
-
+    if dd.get_mirna_counts(sample):
+        out.append({"path": dd.get_mirna_counts(sample)})
+    if dd.get_isomir_counts(sample):
+        out.append({"path": dd.get_isomir_counts(sample)})
     if dd.get_combined_counts(sample):
         out.append({"path": dd.get_combined_counts(sample)})
     if dd.get_annotated_combined_counts(sample):
@@ -363,5 +431,10 @@ def _get_files_project(sample, upload_config):
         out.append({"path": dd.get_isoform_to_gene(sample)})
     if dd.get_square_vcf(sample):
         out.append({"path": dd.get_square_vcf(sample)})
-
+    if dd.get_sailfish_tidy(sample):
+        out.append({"path": dd.get_sailfish_tidy(sample)})
+    if dd.get_sailfish_transcript_tpm(sample):
+        out.append({"path": dd.get_sailfish_transcript_tpm(sample)})
+    if dd.get_sailfish_gene_tpm(sample):
+        out.append({"path": dd.get_sailfish_gene_tpm(sample)})
     return _add_meta(out, config=upload_config)

@@ -56,7 +56,8 @@ def _collapse_transcripts(in_file, window, data, out_dir):
     if not utils.file_uptodate(out_file, in_file):
         with file_transaction(data, out_file) as tx_out_file:
             prep_file = "%s-sortprep%s" % os.path.splitext(tx_out_file)
-            cmd = "sort -k4,4 -k1,1 {in_file} > {prep_file}"
+            sort_cmd = bedutils.get_sort_cmd()
+            cmd = "{sort_cmd} -k4,4 -k1,1 {in_file} > {prep_file}"
             do.run(cmd.format(**locals()), "Sort BED file by transcript name")
             with open(tx_out_file, "w") as out_handle:
                 # Work around for segmentation fault issue with groupby
@@ -66,11 +67,33 @@ def _collapse_transcripts(in_file, window, data, out_dir):
                     for r in x:
                         yield r
                 for name, rs in itertools.groupby(gen(), lambda r: (r.name, r.chrom)):
-                    coords = []
-                    for r in rs:
-                        coords.append(r.start)
-                        coords.append(r.end)
-                    min_pos = max(min(coords) - window, 0)
-                    max_pos = min(max(coords) + window, chrom_sizes[r.chrom])
-                    out_handle.write("%s\t%s\t%s\t%s\n" % (r.chrom, min_pos, max_pos, r.name))
+                    rs = list(rs)
+                    r = rs[0]
+                    for gcoords in _group_coords(rs):
+                        min_pos = max(min(gcoords) - window, 0)
+                        max_pos = min(max(gcoords) + window, chrom_sizes[r.chrom])
+                        out_handle.write("%s\t%s\t%s\t%s\n" % (r.chrom, min_pos, max_pos, r.name))
     return bedutils.sort_merge(out_file, data)
+
+def _group_coords(rs):
+    """Organize coordinate regions into groups for each transcript.
+
+    Avoids collapsing very large introns or repetitive genes spread across
+    the chromosome by limiting the intron size to 100kb for creating a single transcript
+    """
+    max_intron_size = 1e5
+    coords = []
+    for r in rs:
+        coords.append(r.start)
+        coords.append(r.end)
+    coord_groups = []
+    cur_group = []
+    for coord in sorted(coords):
+        if not cur_group or coord - cur_group[-1] < max_intron_size:
+            cur_group.append(coord)
+        else:
+            coord_groups.append(cur_group)
+            cur_group = [coord]
+    if cur_group:
+        coord_groups.append(cur_group)
+    return coord_groups

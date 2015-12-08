@@ -1,8 +1,8 @@
 biopython>=1.61
 boto>=2.34.0
 Cython>=0.19
-ipython>=2.0.0
-ipython-cluster-helper>=0.4.3
+ipyparallel>=4.0.0
+ipython-cluster-helper>=0.4.9
 Logbook>=0.6.0
 lxml>=3.3.5
 msgpack-python>=0.4.0
@@ -16,27 +16,24 @@ PyYAML>=3.10
 toolz>=0.7.1
 tornado>=3.1.0
 # soft dependencies -- not required for bcbio-nextgen-vm
+azure>=0.11.1
 arrow>=0.4.4
-arvados-python-client>=0.1.1405019228.4a7ca04
 awscli>=1.7.14
 bioblend>=0.4.3
-chanjo>=2.0.2
+bcbreport>=0.99.18
 click>=3.3
-cnvkit>=0.3.4
-cutadapt==1.4.2
-cyvcf>=0.1.11
+cyvcf2>=0.2.3
+fadapa>=0.3.1
 fabric>=1.7.0
 gffutils>=0.8.4rc1
-HTSeq >= 0.5.4p5
 joblib>=0.8.4
 openpyxl>=1.6.1,<2.0.0
 path.py>=7.0
 psutil>=1.2.0
-pythonpy>=0.3.6
 python-dateutil>=2.1
 PyVCF>=0.6.7
 sh>=1.07
 tabulate>=0.7.3
 scikit-learn>=0.15.2
 seaborn>=0.5.0
-bcbio-nextgen==0.8.9
+bcbio-nextgen==0.9.4

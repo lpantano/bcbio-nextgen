@@ -14,18 +14,13 @@ from bcbio.variation import annotation, bamprep, ploidy
 def _shared_gatk_call_prep(align_bams, items, ref_file, dbsnp, region, out_file):
     """Shared preparation work for GATK variant calling.
     """
-    config = items[0]["config"]
+    data = items[0]
+    config = data["config"]
     broad_runner = broad.runner_from_config(config)
     broad_runner.run_fn("picard_index_ref", ref_file)
     for x in align_bams:
         bam.index(x, config)
     params = ["-R", ref_file]
-    coverage_depth_max = tz.get_in(["algorithm", "coverage_depth_max"], config)
-    if coverage_depth_max:
-        # GATK can only downsample to a minimum of 200
-        coverage_depth_max = max([200, coverage_depth_max])
-        params += ["--downsample_to_coverage", str(coverage_depth_max),
-                   "--downsampling_type", "BY_SAMPLE"]
     coverage_depth_min = tz.get_in(["algorithm", "coverage_depth_min"], config)
     if coverage_depth_min and coverage_depth_min < 4:
         confidence = "4.0"

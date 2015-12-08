@@ -24,6 +24,7 @@ from bcbio import broad, utils
 from bcbio.pipeline import genome
 from bcbio.variation import effects
 from bcbio.distributed.transaction import file_transaction
+from bcbio.pipeline import datadict as dd
 
 REMOTES = {
     "requirements": "https://raw.github.com/chapmanb/bcbio-nextgen/master/requirements.txt",
@@ -32,10 +33,13 @@ REMOTES = {
     "genome_resources": "https://raw.github.com/chapmanb/bcbio-nextgen/master/config/genomes/%s-resources.yaml",
     "snpeff_dl_url": ("http://downloads.sourceforge.net/project/snpeff/databases/v{snpeff_ver}/"
                       "snpEff_v{snpeff_ver}_{genome}.zip")}
-SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
-                     "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                     "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"]
-SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc", "seq"]
+SUPPORTED_GENOMES = ["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9",
+                     "rn6", "rn5", "canFam3", "dm3", "galGal4", "phix",
+                     "pseudomonas_aeruginosa_ucbpp_pa14", "sacCer3", "TAIR10",
+                     "WBcel235", "xenTro3", "Zv9", "GRCz10"]
+SUPPORTED_INDEXES = ["bowtie", "bowtie2", "bwa", "novoalign", "rtg", "snap",
+                     "star", "ucsc", "seq", "hisat2"]
+DEFAULT_INDEXES = ["rtg"]
 
 Tool = collections.namedtuple("Tool", ["name", "fname"])
 
@@ -79,10 +83,13 @@ def upgrade_bcbio(args):
             _symlink_bcbio(args, script="bcbio_prepare_samples.py")
             upgrade_thirdparty_tools(args, REMOTES)
             print("Third party tools upgrade complete.")
-    if args.toolplus:
+    if args.toolplus and (args.tooldir or args.upgrade != "skip"):
         print("Installing additional tools")
         _install_toolplus(args)
     if args.install_data:
+        for default in DEFAULT_INDEXES:
+            if default not in args.aligners:
+                args.aligners.append(default)
         if len(args.aligners) == 0:
             print("Warning: no aligners provided with `--aligners` flag")
         if len(args.genomes) == 0:
@@ -93,9 +100,8 @@ def upgrade_bcbio(args):
                 upgrade_bcbio_data(args, REMOTES)
                 print("bcbio-nextgen data upgrade complete.")
     if args.isolate and args.tooldir:
-        print("Installation directory not added to current PATH")
-        print(" Add:\n  {t}/bin to PATH\n  {t}/lib to LD_LIBRARY_PATH\n"
-              "  {t}/lib/perl5:{t}/lib/perl5/site_perl to PERL5LIB".format(t=args.tooldir))
+        print("Isolated tool installation not automatically added to environmental variables")
+        print(" Add:\n  {t}/bin to PATH".format(t=args.tooldir))
     save_install_defaults(args)
     args.datadir = _get_data_dir()
     _install_container_bcbio_system(args.datadir)
@@ -178,7 +184,7 @@ def _install_container_bcbio_system(datadir):
     return expose_file
 
 def _get_conda_bin():
-    conda_bin = os.path.join(os.path.dirname(sys.executable), "conda")
+    conda_bin = os.path.join(os.path.dirname(os.path.realpath(sys.executable)), "conda")
     if os.path.exists(conda_bin):
         return conda_bin
 
@@ -203,32 +209,37 @@ def _default_deploy_args(args):
 def _update_conda_packages():
     """If installed in an anaconda directory, upgrade conda packages.
     """
-    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "cyvcf2", "gffutils",
+            "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
-            "sqlalchemy", "statsmodels", "toolz", "tornado"]
-    channels = ["-c", "https://conda.binstar.org/bcbio"]
+            "sqlalchemy", "statsmodels", "toolz", "tornado", "seqcluster_lite"]
+    channels = ["-c", "bcbio", "-c", "bioconda"]
     conda_bin = _get_conda_bin()
     if conda_bin:
-        subprocess.check_call([conda_bin, "install", "--yes", "numpy"])
-        subprocess.check_call([conda_bin, "install", "--yes"] + channels + pkgs)
+        subprocess.check_call([conda_bin, "install", "--quiet", "--yes"] + channels + pkgs)
         return os.path.dirname(os.path.dirname(conda_bin))
 
 def _get_data_dir():
-    base_dir = os.path.realpath(os.path.dirname(os.path.dirname(sys.executable)))
+    base_dir = os.path.realpath(os.path.dirname(os.path.dirname(os.path.realpath(sys.executable))))
     if "anaconda" not in os.path.basename(base_dir) and "virtualenv" not in os.path.basename(base_dir):
         raise ValueError("Cannot update data for bcbio-nextgen not installed by installer.\n"
                          "bcbio-nextgen needs to be installed inside an anaconda environment \n"
                          "located in the same directory as `galaxy` `genomes` and `gemini_data` directories.")
     return os.path.dirname(base_dir)
 
-def get_gemini_dir():
+def get_gemini_dir(data=None):
     try:
         data_dir = _get_data_dir()
         return os.path.join(data_dir, "gemini_data")
     except ValueError:
-        return None
+        if data:
+            galaxy_dir = dd.get_galaxy_dir(data)
+            data_dir = os.path.realpath(os.path.dirname(os.path.dirname(galaxy_dir)))
+            return os.path.join(data_dir, "gemini_data")
+        else:
+            return None
 
 def upgrade_bcbio_data(args, remotes):
     """Upgrade required genome data files in place.
@@ -256,7 +267,8 @@ def upgrade_bcbio_data(args, remotes):
         extras = []
         if "cadd" in toolplus:
             extras.extend(["--extra", "cadd_score"])
-        subprocess.check_call([gemini, "update", "--dataonly"] + extras)
+        ann_dir = get_gemini_dir()
+        subprocess.check_call([gemini, "--annotation-dir", ann_dir, "update", "--dataonly"] + extras)
 
 def _upgrade_genome_resources(galaxy_dir, base_url):
     """Retrieve latest version of genome resource YAML configuration files.
@@ -311,7 +323,7 @@ def _upgrade_snpeff_data(galaxy_dir, args, remotes):
                         subprocess.check_call(["unzip", dl_file])
                         os.remove(dl_file)
                     dl_dir = os.path.join(snpeff_base_dir, "data", snpeff_db)
-                    os.rename(dl_dir, snpeff_db_dir)
+                    shutil.move(dl_dir, snpeff_db_dir)
                     os.rmdir(os.path.join(snpeff_base_dir, "data"))
 
 def _is_old_database(db_dir, args):
@@ -381,18 +393,16 @@ def _install_toolplus(args):
     system_config = os.path.join(_get_data_dir(), "galaxy", "bcbio_system.yaml")
     toolplus_dir = os.path.join(_get_data_dir(), "toolplus")
     for tool in args.toolplus:
-        if tool.name == "data":
-            _install_gemini(args.tooldir, _get_data_dir(), args)
-        elif tool.name == "kraken":
+        if tool.name == "kraken":
             _install_kraken_db(_get_data_dir(), args)
         elif tool.name in set(["gatk", "mutect"]):
             _install_gatk_jar(tool.name, tool.fname, toolplus_manifest, system_config, toolplus_dir)
         elif tool.name in set(["protected"]):  # back compatibility
             pass
-        elif tool.name in set(["cadd", "dbnsfp"]):  # larger data targets
+        elif tool.name in set(["cadd", "dbnsfp", "data"]):  # larger data targets
             pass
         else:
-            raise ValueError("Unexpected toolplus argument: %s %s" (tool.name, tool.fname))
+            raise ValueError("Unexpected toolplus argument: %s %s" % (tool.name, tool.fname))
 
 def get_gatk_jar_version(name, fname):
     if name == "gatk":
@@ -441,32 +451,6 @@ def _update_system_file(system_file, name, new_kvs):
     config["resources"] = new_rs
     with open(system_file, "w") as out_handle:
         yaml.safe_dump(config, out_handle, default_flow_style=False, allow_unicode=False)
-
-def _install_gemini(tooldir, datadir, args):
-    """Install gemini layered on top of bcbio-nextgen, sharing anaconda framework.
-    """
-    # check if we have an up to date version, upgrading if needed
-    gemini = os.path.join(os.path.dirname(sys.executable), "gemini")
-    if os.path.exists(gemini):
-        vurl = "https://raw.github.com/arq5x/gemini/master/requirements.txt"
-        requests.packages.urllib3.disable_warnings()
-        r = requests.get(vurl, verify=False)
-        for line in r.text.split():
-            if line.startswith(("gemini=", "gemini>")):
-                latest_version = line.split("=")[-1].split(">")[-1]
-        cur_version = subprocess.check_output([gemini, "-v"], stderr=subprocess.STDOUT).strip().split()[-1]
-        if LooseVersion(latest_version) > LooseVersion(cur_version):
-            subprocess.check_call([gemini, "update"])
-    # install from scratch inside existing Anaconda python
-    else:
-        url = "https://raw.github.com/arq5x/gemini/master/gemini/scripts/gemini_install.py"
-        script = os.path.basename(url)
-        subprocess.check_call(["wget", "-O", script, url, "--no-check-certificate"])
-        cmd = [sys.executable, "-Es", script, tooldir, datadir, "--notools", "--nodata", "--sharedpy"]
-        if not args.sudo:
-            cmd.append("--nosudo")
-        subprocess.check_call(cmd)
-        os.remove(script)
 
 def _install_kraken_db(datadir, args):
     """Install kraken minimal DB in genome folder.
@@ -574,6 +558,9 @@ def add_install_defaults(args):
                              "After a successful upgrade, the '--tools' parameter will "
                              "work for future upgrades.")
     for attr in ["genomes", "aligners", "toolplus"]:
+        # don't upgrade default genomes if a genome was specified
+        if attr == "genomes" and len(args.genomes) > 0:
+            continue
         for x in default_args.get(attr, []):
             x = Tool(x, None) if attr == "toolplus" else str(x)
             new_val = getattr(args, attr)

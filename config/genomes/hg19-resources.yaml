@@ -1,9 +1,9 @@
-version: 17
+version: 23
 
 aliases:
   human: true
   snpeff: hg19
-  ensembl: homo_sapiens_vep_79_GRCh37
+  ensembl: homo_sapiens_vep_81_GRCh37
 
 variation:
   dbsnp: ../variation/dbsnp_138.vcf.gz
@@ -12,9 +12,10 @@ variation:
   train_1000g: ../variation/1000G_phase1.snps.high_confidence.vcf.gz
   train_indels: ../variation/Mills_and_1000G_gold_standard.indels.vcf.gz
   cosmic: ../variation/cosmic-v68-hg19.vcf.gz
-  lcr: ../variation/LCR.bed.gz
-  sv_repeat: ../variation/sv_repeat_telomere_centromere.bed
-  dbnsfp: ../variation/dbNSFP_v2.7.gz
+  lcr: ../coverage/problem_regions/repeats/LCR.bed.gz
+  sv_repeat: ../coverage/problem_regions/repeats/sv_repeat_telomere_centromere.bed
+  encode_blacklist: ../coverage/problem_regions/ENCODE/wgEncodeDacMapabilityConsensusExcludable.bed
+  dbnsfp: ../variation/dbNSFP_v3.0b2c.gz
   ancestral: ../variation/human_ancestor.fa.gz
 
 rnaseq:
@@ -25,3 +26,11 @@ rnaseq:
   dexseq: ../rnaseq/ref-transcripts.dexseq.gff3
   refflat: ../rnaseq/ref-transcripts.refFlat
   rRNA_fa: ../rnaseq/rRNA.fa
+
+srnaseq:
+    srna-transcripts: ../srnaseq/srna-transcripts.gtf
+    mirbase: ../srnaseq/hairpin.fa
+
+coverage:
+  coverage_problem_dir: ../coverage/problem_regions
+  MIG: ../prioritization/MIG.bed

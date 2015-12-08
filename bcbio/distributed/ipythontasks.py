@@ -2,14 +2,19 @@
 """
 import contextlib
 
-from IPython.parallel import require
+try:
+    from ipyparallel import require
+except ImportError:
+    from IPython.parallel import require
 
-from bcbio import heterogeneity, chipseq, structural, upload
+from bcbio import heterogeneity, hla, chipseq, structural, upload
 from bcbio.bam import callable
 from bcbio.rnaseq import sailfish
 from bcbio.distributed import ipython
 from bcbio.ngsalign import alignprep
 from bcbio import rnaseq
+from bcbio.srna import sample as srna
+from bcbio.srna import group as seqcluster
 from bcbio.pipeline import (archive, config_utils, disambiguate, sample,
                             qcsummary, shared, variation, run_info, rnaseq)
 from bcbio.provenance import system
@@ -72,6 +77,36 @@ def trim_sample(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(sample.trim_sample, *args))
+
+@require(srna)
+def trim_srna_sample(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(srna.trim_srna_sample, *args))
+
+@require(srna)
+def srna_annotation(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(srna.sample_annotation, *args))
+
+@require(seqcluster)
+def seqcluster_prepare(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(seqcluster.run_prepare, *args))
+
+@require(seqcluster)
+def seqcluster_cluster(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(seqcluster.run_cluster, *args))
+
+@require(seqcluster)
+def srna_alignment(* args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(seqcluster.run_align, *args))
 
 @require(sailfish)
 def run_sailfish(*args):
@@ -150,6 +185,12 @@ def pipeline_summary(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(qcsummary.pipeline_summary, *args))
+
+@require(qcsummary)
+def coverage_report(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(qcsummary.coverage_report, *args))
 
 @require(qcsummary)
 def qsignature_summary(*args):
@@ -242,11 +283,23 @@ def prep_gemini_db(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(population.prep_gemini_db, *args))
 
+@require(hla)
+def call_hla(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(hla.call_hla, *args))
+
 @require(structural)
 def detect_sv(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(structural.detect_sv, *args))
+
+@require(structural)
+def validate_sv(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(structural.validate_sv, *args))
 
 @require(structural)
 def finalize_sv(*args):
@@ -271,12 +324,6 @@ def compare_to_rm(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(validate.compare_to_rm, *args))
-
-@require(coverage)
-def coverage_summary(*args):
-    args = ipython.unzip_args(args)
-    with _setup_logging(args) as config:
-        return ipython.zip_args(apply(coverage.summary, *args))
 
 @require(disambiguate)
 def run_disambiguate(*args):
@@ -304,7 +351,7 @@ def machine_info(*args):
 @require(chipseq)
 def clean_chipseq_alignment(*args):
     args = ipython.unzip_args(args)
-    return ipython.zip_args(chipseq.machine_info())
+    return ipython.zip_args(apply(chipseq.clean_chipseq_alignment, *args))
 
 @require(archive)
 def archive_to_cram(*args):
@@ -336,8 +383,20 @@ def organize_samples(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(run_info.organize, *args))
 
+@require(run_info)
+def prep_system(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(run_info.prep_system, *args))
+
 @require(upload)
 def upload_samples(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(upload.from_sample, *args))
+
+@require(upload)
+def upload_samples_project(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(upload.project_from_sample, *args))

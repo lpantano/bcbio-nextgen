@@ -1,8 +1,11 @@
 """Multiprocessing ready entry points for sample analysis.
 """
-from bcbio import heterogeneity, structural, utils, chipseq, upload
+from bcbio import heterogeneity, hla, structural, utils, chipseq, upload
 from bcbio.bam import callable
-from bcbio.rnaseq import (sailfish, express)
+from bcbio.srna import sample as srna
+from bcbio.srna import group as seqcluster
+from bcbio.cwl import create as cwl_create
+from bcbio.rnaseq import (sailfish)
 from bcbio.ngsalign import alignprep
 from bcbio.pipeline import (archive, disambiguate, qcsummary, sample,
                             main, shared, variation, run_info, rnaseq)
@@ -27,6 +30,10 @@ def trim_sample(*args):
     return sample.trim_sample(*args)
 
 @utils.map_wrap
+def trim_srna_sample(*args):
+    return srna.trim_srna_sample(*args)
+
+@utils.map_wrap
 def process_alignment(*args):
     return sample.process_alignment(*args)
 
@@ -37,6 +44,22 @@ def postprocess_alignment(*args):
 @utils.map_wrap
 def prep_samples(*args):
     return sample.prep_samples(*args)
+
+@utils.map_wrap
+def srna_annotation(*args):
+    return srna.sample_annotation(*args)
+
+@utils.map_wrap
+def seqcluster_prepare(*args):
+    return seqcluster.run_prepare(*args)
+
+@utils.map_wrap
+def seqcluster_cluster(*args):
+    return seqcluster.run_cluster(*args)
+
+@utils.map_wrap
+def srna_alignment(*args):
+    return seqcluster.run_align(*args)
 
 @utils.map_wrap
 def prep_align_inputs(*args):
@@ -69,6 +92,10 @@ def postprocess_variants(*args):
 @utils.map_wrap
 def pipeline_summary(*args):
     return qcsummary.pipeline_summary(*args)
+
+@utils.map_wrap
+def coverage_report(*args):
+    return qcsummary.coverage_report(*args)
 
 @utils.map_wrap
 def qsignature_summary(*args):
@@ -123,8 +150,16 @@ def merge_variant_files(*args):
     return vcfutils.merge_variant_files(*args)
 
 @utils.map_wrap
+def call_hla(*args):
+    return hla.call_hla(*args)
+
+@utils.map_wrap
 def detect_sv(*args):
     return structural.detect_sv(*args)
+
+@utils.map_wrap
+def validate_sv(*args):
+    return structural.validate_sv(*args)
 
 @utils.map_wrap
 def heterogeneity_estimate(*args):
@@ -157,10 +192,6 @@ def combine_sample_regions(*args):
 @utils.map_wrap
 def compare_to_rm(*args):
     return validate.compare_to_rm(*args)
-
-@utils.map_wrap
-def coverage_summary(*args):
-    return coverage.summary(*args)
 
 @utils.map_wrap
 def run_disambiguate(*args):
@@ -199,8 +230,20 @@ def organize_samples(*args):
     return run_info.organize(*args)
 
 @utils.map_wrap
+def prep_system(*args):
+    return run_info.prep_system(*args)
+
+@utils.map_wrap
 def upload_samples(*args):
     return upload.from_sample(*args)
+
+@utils.map_wrap
+def upload_samples_project(*args):
+    return upload.project_from_sample(*args)
+
+@utils.map_wrap
+def create_cwl(*args):
+    return cwl_create.from_world(*args)
 
 @utils.map_wrap
 def run_main(*args):

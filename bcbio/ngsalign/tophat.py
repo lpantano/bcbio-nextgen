@@ -4,8 +4,10 @@ http://tophat.cbcb.umd.edu
 """
 import os
 import shutil
+import sys
 from contextlib import closing
 import glob
+import subprocess
 
 import numpy
 import pysam
@@ -65,7 +67,7 @@ def _set_rg_options(options, names):
         return options
     options["rg-id"] = names["rg"]
     options["rg-sample"] = names["sample"]
-    options["rg-library"] = names["pl"]
+    options["rg-library"] = names["lb"] or names["pl"]
     options["rg-platform-unit"] = names["pu"]
     return options
 
@@ -145,9 +147,8 @@ def tophat_align(fastq_file, pair_file, ref_file, out_base, align_dir, data,
             # tophat requires options before arguments,
             # otherwise it silently ignores them
             tophat_ready = tophat_runner.bake(**ready_options)
-            cmd = str(tophat_ready.bake(*files))
+            cmd = "%s %s" % (sys.executable, str(tophat_ready.bake(*files)))
             do.run(cmd, "Running Tophat on %s and %s." % (fastq_file, pair_file), None)
-        _fix_empty_readnames(out_file, data)
     if pair_file and _has_alignments(out_file):
         fixed = _fix_mates(out_file, os.path.join(out_dir, "%s-align.sam" % out_base),
                            ref_file, config)
@@ -180,22 +181,6 @@ def _has_alignments(sam_file):
             elif not line.startswith("@"):
                 return True
     return False
-
-def _fix_empty_readnames(orig_file, data):
-    """ Fix SAMfile reads with empty read names
-
-    Tophat 2.0.9 sometimes outputs empty read names, making the
-    FLAG field be the read name. This throws those reads away.
-    """
-    with file_transaction(data, orig_file) as tx_out_file:
-        logger.info("Removing reads with empty read names from Tophat output.")
-        with open(orig_file) as orig, open(tx_out_file, "w") as out:
-            for line in orig:
-                if line.split()[0].isdigit():
-                    continue
-                out.write(line)
-    return orig_file
-
 
 def _fix_mates(orig_file, out_file, ref_file, config):
     """Fix problematic unmapped mate pairs in TopHat output.
@@ -350,11 +335,11 @@ def _get_bowtie_with_reference(config, ref_file, version):
 
 
 def _tophat_major_version(config):
-    tophat_runner = sh.Command(config_utils.get_program("tophat", config,
-                                                        default="tophat"))
+    cmd =  [sys.executable, config_utils.get_program("tophat", config, default="tophat"),
+            "--version"]
 
     # tophat --version returns strings like this: Tophat v2.0.4
-    version_string = str(tophat_runner(version=True)).strip().split()[1]
+    version_string = str(subprocess.check_output(cmd)).strip().split()[1]
     major_version = int(version_string.split(".")[0][1:])
     return major_version
 

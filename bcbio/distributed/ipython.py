@@ -14,9 +14,14 @@ import os
 import time
 
 try:
-    import msgpack
-except ImportError:
+    import ipyparallel
+    # msgpack not working with IPython 4.0 ipyparallel
     msgpack = None
+except ImportError:
+    try:
+        import msgpack
+    except ImportError:
+        msgpack = None
 
 from bcbio import utils
 from bcbio.log import logger, get_log_dir
@@ -117,9 +122,9 @@ def runner(view, parallel, dirs, config):
     """
     def run(fn_name, items):
         out = []
+        fn, fn_name = (fn_name, fn_name.__name__) if callable(fn_name) else (_get_ipython_fn(fn_name, parallel), fn_name)
         items = [x for x in items if x is not None]
         items = diagnostics.track_parallel(items, fn_name)
-        fn = _get_ipython_fn(fn_name, parallel)
         logger.info("ipython: %s" % fn_name)
         if len(items) > 0:
             items = [config_utils.add_cores_to_config(x, parallel["cores_per_job"], parallel) for x in items]

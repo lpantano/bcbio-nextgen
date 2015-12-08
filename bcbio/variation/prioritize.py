@@ -51,8 +51,7 @@ def _apply_priority_filter(in_file, priority_file, data):
             cmd = ("bcftools annotate -a {priority_file} -h {header_file} "
                    "-c CHROM,FROM,TO,REF,ALT,INFO/EPR {in_file} | "
                    "bcftools filter -m '+' -s 'LowPriority' "
-                   "-e 'EPR[*] != \"pass\"' | "
-                   r"""sed 's/\\\"pass\\\"/pass/' | bgzip -c > {tx_out_file}""")
+                   """-e "EPR[*] != 'pass'" | bgzip -c > {tx_out_file}""")
             do.run(cmd.format(**locals()), "Run external annotation based prioritization filtering")
     vcfutils.bgzip_and_index(out_file, data["config"])
     return out_file
@@ -91,14 +90,15 @@ def _prep_priority_filter(gemini_db, data):
                 for row in gq:
                     ref_depth = tz.get_in(["gt_ref_depths", sidx], row, 0)
                     alt_depth = tz.get_in(["gt_alt_depths", sidx], row, 0)
+                    out_vals = dict(row.row)
                     try:
-                        row.row["freq"] = "%.2f" % (float(alt_depth) / float(ref_depth + alt_depth))
+                        out_vals["freq"] = "%.2f" % (float(alt_depth) / float(ref_depth + alt_depth))
                     except ZeroDivisionError:
-                        row.row["freq"] = "0.00"
-                    row.row["filter"] = _calc_priority_filter(row, pops)
-                    if row["chrom"] not in ref_chroms and _hg19_to_GRCh37(row["chrom"]) in ref_chroms:
-                        row.row["chrom"] = _hg19_to_GRCh37(row["chrom"])
-                    out = [row[x] for x in header]
+                        out_vals["freq"] = "0.00"
+                    out_vals["filter"] = _calc_priority_filter(row, pops)
+                    if out_vals["chrom"] not in ref_chroms and _hg19_to_GRCh37(out_vals["chrom"]) in ref_chroms:
+                        out_vals["chrom"] = _hg19_to_GRCh37(out_vals["chrom"])
+                    out = [out_vals[x] for x in header]
                     writer.writerow(out)
     return vcfutils.bgzip_and_index(out_file, data["config"],
                                     tabix_args="-0 -c '#' -s 1 -b 2 -e 3")

@@ -7,11 +7,12 @@ import os
 import contextlib
 import subprocess
 import sys
-
 import yaml
+import toolz as tz
 
 from bcbio import utils
 from bcbio.pipeline import config_utils, version
+from bcbio.pipeline import datadict as dd
 from bcbio.log import logger
 
 _cl_progs = [{"cmd": "bamtofastq", "name": "biobambam",
@@ -22,7 +23,6 @@ _cl_progs = [{"cmd": "bamtofastq", "name": "biobambam",
              {"cmd": "bowtie2", "args": "--version", "stdout_flag": "bowtie2-align version"},
              {"cmd": "bwa", "stdout_flag": "Version:"},
              {"cmd": "chanjo"},
-             {"cmd": "cufflinks", "stdout_flag": "cufflinks"},
              {"cmd": "cutadapt", "args": "--version"},
              {"cmd": "fastqc", "args": "--version", "stdout_flag": "FastQC"},
              {"cmd": "freebayes", "stdout_flag": "version:"},
@@ -30,12 +30,13 @@ _cl_progs = [{"cmd": "bamtofastq", "name": "biobambam",
              {"cmd": "novosort", "paren_flag": "novosort"},
              {"cmd": "novoalign", "stdout_flag": "Novoalign"},
              {"cmd": "samtools", "stdout_flag": "Version:"},
-             {"cmd": "sambamba", "stdout_flag": "sambamba"},
              {"cmd": "qualimap", "args": "-h", "stdout_flag": "QualiMap"},
-             {"cmd": "tophat", "args": "--version", "stdout_flag": "TopHat"},
              {"cmd": "vcflib", "has_cl_version": False},
-             {"cmd": "featurecounts", "args": "-v", "stdout_flag": "featureCounts"},
-             {"cmd": "kraken", "args": "-v", "stdout_flag": "kraken"}]
+             {"cmd": "featurecounts", "args": "-v", "stdout_flag": "featureCounts"}]
+_manifest_progs = ["BubbleTree", "cufflinks-binary", "cnvkit", "gatk-framework", "grabix", "htseq",
+                   "lumpy-sv", "manta", "metasv", "phylowgs", "platypus-variant", "rna-star",
+                   "rtg-tools","sambamba-binary", "samblaster", "scalpel", "vardict",
+                   "vardict-java", "vep", "vt", "wham"]
 
 def _broad_versioner(type):
     def get_version(config):
@@ -72,7 +73,7 @@ def jar_versioner(program_name, jar_name):
             jar = jar.replace(to_remove, "")
         if jar.startswith(("-", ".")):
             jar = jar[1:]
-        if jar is "":
+        if not jar:
             logger.warn("Unable to determine version for program '{}' from jar file {}".format(
                 program_name, config_utils.get_jar(jar_name, pdir)))
         return jar
@@ -129,6 +130,7 @@ def _get_cl_version(p, config):
     try:
         prog = config_utils.get_program(p["cmd"], config)
     except config_utils.CmdNotFound:
+
         localpy_cmd = os.path.join(os.path.dirname(sys.executable), p["cmd"])
         if os.path.exists(localpy_cmd):
             prog = localpy_cmd
@@ -177,9 +179,10 @@ def _get_versions(config=None):
     out = [{"program": "bcbio-nextgen",
             "version": ("%s-%s" % (version.__version__, version.__git_revision__)
                         if version.__git_revision__ else version.__version__)}]
-    manifest_vs = _get_versions_manifest()
+    manifest_dir = _get_manifest_dir(config)
+    manifest_vs = _get_versions_manifest(manifest_dir)
     if manifest_vs:
-        return out + manifest_vs
+        out += manifest_vs
     else:
         assert config is not None, "Need configuration to retrieve from non-manifest installs"
         brew_vs = _get_brew_versions()
@@ -191,14 +194,38 @@ def _get_versions(config=None):
             out.append({"program": p["name"],
                         "version": (brew_vs[p["name"]] if p["name"] in brew_vs else
                                     p["version_fn"](config))})
-        return out
+    out.sort(key=lambda x: x["program"])
+    return out
 
-def _get_versions_manifest():
+def _get_manifest_dir(data=None):
+    """
+    get manifest directory from the data dictionary, falling back on alternatives
+    it prefers, in order:
+    1. locating it from the bcbio_system.yaml file
+    2. locating it from the galaxy directory
+    3. location it from the python executable. 
+
+    it can accept either the data or config dictionary
+    """
+    manifest_dir = None
+    if data:
+        bcbio_system = tz.get_in(["config", "bcbio_system"], data, None)
+        bcbio_system = bcbio_system if bcbio_system else data.get("bcbio_system", None)
+        if bcbio_system:
+            sibling_dir = os.path.normpath(os.path.dirname(bcbio_system))
+        else:
+            sibling_dir = dd.get_galaxy_dir(data)
+        if sibling_dir:
+            manifest_dir = os.path.normpath(os.path.join(sibling_dir, os.pardir,
+                                                         "manifest"))
+    if not manifest_dir or not os.path.exists(manifest_dir):
+        manifest_dir = os.path.join(config_utils.get_base_installdir(), "manifest")
+    return manifest_dir
+
+def _get_versions_manifest(manifest_dir):
     """Retrieve versions from a pre-existing manifest of installed software.
     """
-    all_pkgs = ["htseq", "cn.mops", "vt", "platypus-variant", "gatk-framework"] + \
-               [p.get("name", p["cmd"]) for p in _cl_progs] + [p["name"] for p in _alt_progs]
-    manifest_dir = os.path.join(config_utils.get_base_installdir(), "manifest")
+    all_pkgs = _manifest_progs + [p.get("name", p["cmd"]) for p in _cl_progs] + [p["name"] for p in _alt_progs]
     if os.path.exists(manifest_dir):
         out = []
         for plist in ["toolplus", "brew", "python", "r", "debian", "custom"]:
@@ -238,10 +265,11 @@ def write_versions(dirs, config=None, is_wrapper=False):
                 out_handle.write("{program},{version}\n".format(**p))
     return out_file
 
-def get_version_manifest(name, required=False):
+def get_version_manifest(name, data=None, required=False):
     """Retrieve a version from the currently installed manifest.
     """
-    manifest_vs = _get_versions_manifest()
+    manifest_dir = _get_manifest_dir(data)
+    manifest_vs = _get_versions_manifest(manifest_dir)
     for x in manifest_vs:
         if x["program"] == name:
             v = x.get("version", "")

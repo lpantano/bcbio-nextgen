@@ -24,18 +24,19 @@ def _get_resource_programs(progs, algs):
                 aligner = alg.get("aligner")
                 if aligner:
                     out.add(aligner)
-        elif p == "variantcaller":
-            for key, fn in parent_child.items():
-                if fn(algs):
-                    out.add(key)
+        elif p in ["variantcaller", "svcaller"]:
+            if p == "variantcaller": 
+                for key, fn in parent_child.items():
+                    if fn(algs):
+                        out.add(key)
             for alg in algs:
-                vc = alg.get("variantcaller")
-                if vc:
-                    if isinstance(vc, (list, tuple)):
-                        for x in vc:
+                callers = alg.get(p)
+                if callers:
+                    if isinstance(callers, (list, tuple)):
+                        for x in callers:
                             out.add(x)
                     else:
-                        out.add(vc)
+                        out.add(callers)
         elif p in checks:
             if checks[p](algs):
                 out.add(p)
@@ -83,10 +84,10 @@ def _get_prog_memory(resources, cores_per_job):
     memory = resources.get("memory")
     if memory:
         out = _str_memory_to_gb(memory)
-    prog_cores = resources.get("cores", 1)
+    prog_cores = resources.get("cores")
     # if a single core with memory is requested for the job
     # and we run multiple cores, scale down to avoid overscheduling
-    if out and prog_cores == 1 and cores_per_job > prog_cores:
+    if out and prog_cores and int(prog_cores) == 1 and cores_per_job > int(prog_cores):
         out = out / float(cores_per_job)
     return out
 

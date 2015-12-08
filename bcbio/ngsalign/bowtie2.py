@@ -3,8 +3,6 @@
 http://bowtie-bio.sourceforge.net/bowtie2/index.shtml
 """
 import os
-from itertools import ifilter
-import pysam
 
 from bcbio.pipeline import config_utils
 from bcbio.utils import file_exists
@@ -13,6 +11,7 @@ from bcbio.provenance import do
 from bcbio import bam
 from bcbio.pipeline import datadict as dd
 from bcbio.rnaseq import gtf
+from bcbio.ngsalign import postalign
 
 def _bowtie2_args_from_config(config):
     """Configurable high level options for bowtie2.
@@ -49,8 +48,8 @@ def align(fastq_file, pair_file, ref_file, names, align_dir, data,
             cl += ["-S", tx_out_file]
             if names and "rg" in names:
                 cl += ["--rg-id", names["rg"]]
-                for key, tag in [("sample", "SM"), ("pl", "PL"), ("pu", "PU")]:
-                    if key in names:
+                for key, tag in [("sample", "SM"), ("pl", "PL"), ("pu", "PU"), ("lb", "LB")]:
+                    if names.get(key):
                         cl += ["--rg", "%s:%s" % (tag, names[key])]
             cl = [str(i) for i in cl]
             do.run(cl, "Aligning %s and %s with Bowtie2." % (fastq_file, pair_file),
@@ -65,45 +64,43 @@ def remap_index_fn(ref_file):
     """
     return os.path.splitext(ref_file)[0].replace("/seq/", "/bowtie2/")
 
-
-def filter_multimappers(align_file):
+def filter_multimappers(align_file, data):
     """
     It does not seem like bowtie2 has a corollary to the -m 1 flag in bowtie,
     there are some options that are close but don't do the same thing. Bowtie2
     sets the XS flag for reads mapping in more than one place, so we can just
     filter on that. This will not work for other aligners.
     """
-    type_flag = "b" if bam.is_bam(align_file) else ""
+    config = dd.get_config(data)
+    type_flag = "" if bam.is_bam(align_file) else "S"
     base, ext = os.path.splitext(align_file)
-    align_handle = pysam.Samfile(align_file, "r" + type_flag)
-    tmp_out_file = os.path.splitext(align_file)[0] + ".tmp"
-    def keep_fn(read):
-        return _is_properly_mapped(read) and _is_unique(read)
-    keep = ifilter(keep_fn, align_handle)
-    with pysam.Samfile(tmp_out_file, "w" + type_flag, template=align_handle) as out_handle:
-        for read in keep:
-            out_handle.write(read)
-    align_handle.close()
-    out_handle.close()
-    os.rename(tmp_out_file, align_file)
-    return align_file
-
-def _is_properly_mapped(read):
-    if read.is_paired and not read.is_proper_pair:
-        return False
-    if read.is_unmapped:
-        return False
-    return True
-
-def _is_unique(read):
-    tags = [x[0] for x in read.tags]
-    return "XS" not in tags
-
+    out_file = base + ".unique" + ext
+    if file_exists(out_file):
+        return out_file
+    base_filter = '-F "[XS] == null and not unmapped {paired_filter}"'
+    if bam.is_paired(align_file):
+        paired_filter = "and paired and proper_pair"
+    else:
+        paired_filter = ""
+    filter_string = base_filter.format(paired_filter=paired_filter)
+    sambamba = config_utils.get_program("sambamba", config)
+    num_cores = dd.get_num_cores(data)
+    with file_transaction(out_file) as tx_out_file:
+        cmd = ('{sambamba} view -h{type_flag} '
+               '--nthreads {num_cores} '
+               '-f bam '
+               '{filter_string} '
+               '{align_file} '
+               '> {tx_out_file}')
+        message = "Removing multimapped reads from %s." % align_file
+        do.run(cmd.format(**locals()), message)
+    return out_file
 
 ANALYSIS = {"chip-seq": {"params": ["-X", 2000]},
             "variant2": {"params": ["-X", 2000]},
             "standard": {"params": ["-X", 2000]},
-            "rna-seq": {"params": ["--sensitive", "-X", 2000]}}
+            "rna-seq": {"params": ["--sensitive", "-X", 2000]},
+            "smallrna-seq": {"params": ["-N", 1, "-k", 1000, "--sensitive", "-X", 200]}}
 
 def index_transcriptome(gtf_file, ref_file, data):
     """
@@ -134,9 +131,10 @@ def align_transcriptome(fastq_file, pair_file, ref_file, data):
     num_cores = data["config"]["algorithm"].get("num_cores", 1)
     fastq_cmd = "-1 %s" % fastq_file if pair_file else "-U %s" % fastq_file
     pair_cmd = "-2 %s " % pair_file if pair_file else ""
-    cmd = ("{bowtie2} -p {num_cores} -a -X 600 --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 --no-discordant --no-mixed -x {gtf_index} {fastq_cmd} {pair_cmd} | samtools view -hbS - > {tx_out_file}")
+    cmd = ("{bowtie2} -p {num_cores} -a -X 600 --rdg 6,5 --rfg 6,5 --score-min L,-.6,-.4 --no-discordant --no-mixed -x {gtf_index} {fastq_cmd} {pair_cmd} ")
     with file_transaction(out_file) as tx_out_file:
         message = "Aligning %s and %s to the transcriptome." % (fastq_file, pair_file)
+        cmd += "| " + postalign.sam_to_sortbam_cl(data, tx_out_file, name_sort=True)
         do.run(cmd.format(**locals()), message)
     data = dd.set_transcriptome_bam(data, out_file)
     return data

@@ -3,6 +3,7 @@
 http://cufflinks.cbcb.umd.edu/manual.html
 """
 import os
+import shutil
 import tempfile
 
 from bcbio.utils import get_in, file_exists, safe_makedir
@@ -93,7 +94,7 @@ def _get_output_dir(align_file, data, sample_dir=True):
 def assemble(bam_file, ref_file, num_cores, out_dir, data):
     out_dir = os.path.join(out_dir, data["rgnames"]["sample"])
     safe_makedir(out_dir)
-    out_file = os.path.join(out_dir, data["rgnames"]["sample"], "transcripts.gtf")
+    out_file = os.path.join(out_dir, "transcripts.gtf")
     if file_exists(out_file):
         return out_file
     with file_transaction(data, out_dir) as tmp_out_dir:
@@ -236,5 +237,5 @@ def merge(assembled_gtfs, ref_file, gtf_file, num_cores, data):
     fixed = fix_cufflinks_attributes(gtf_file, clean, data)
     classified = annotate_gtf.annotate_novel_coding(fixed, gtf_file, ref_file)
     filtered = annotate_gtf.cleanup_transcripts(classified, gtf_file, ref_file)
-    os.rename(filtered, out_file)
+    shutil.move(filtered, out_file)
     return out_file

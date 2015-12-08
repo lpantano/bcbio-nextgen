@@ -27,11 +27,11 @@ def create_inputs(data):
     aligner = tz.get_in(("config", "algorithm", "aligner"), data)
     # CRAM files must be converted to bgzipped fastq, unless not aligning.
     # Also need to prep and download remote files.
-    if not ("files" in data and aligner and (_is_cram_input(data["files"]) or
-                                             objectstore.is_remote(data["files"][0]))):
+    if not ("files" in data and data["files"] and aligner and (_is_cram_input(data["files"]) or
+                                                               objectstore.is_remote(data["files"][0]))):
         # skip indexing on samples without input files or not doing alignment
         # skip if we're not BAM and not doing alignment splitting
-        if ("files" not in data or data["files"][0] is None or not aligner
+        if ("files" not in data or not data["files"] or data["files"][0] is None or not aligner
               or _no_index_needed(data)):
             return [[data]]
     ready_files = _prep_grabix_indexes(data["files"], data["dirs"], data)
@@ -121,7 +121,13 @@ def merge_split_alignments(samples, run_parallel):
             cur_data["combine"][file_key]["extras"].append(x[file_key])
         ready_merge.append([cur_data])
     merged = run_parallel("delayed_bam_merge", ready_merge)
-    return merged + ready
+    # Add stable 'align_bam' target to use for retrieving raw alignment
+    out = []
+    for data in [x[0] for x in merged + ready]:
+        if data.get("work_bam"):
+            data["align_bam"] = data["work_bam"]
+        out.append([data])
+    return out
 
 # ## determine file sections
 
@@ -148,10 +154,10 @@ def _find_read_splits(in_file, split_size):
 # ## bgzip and grabix
 
 def _is_bam_input(in_files):
-    return in_files[0].endswith(".bam") and (len(in_files) == 1 or in_files[1] is None)
+    return in_files and in_files[0].endswith(".bam") and (len(in_files) == 1 or in_files[1] is None)
 
 def _is_cram_input(in_files):
-    return in_files[0].endswith(".cram") and (len(in_files) == 1 or in_files[1] is None)
+    return in_files and in_files[0].endswith(".cram") and (len(in_files) == 1 or in_files[1] is None)
 
 def _prep_grabix_indexes(in_files, dirs, data):
     if _is_bam_input(in_files):
@@ -160,7 +166,8 @@ def _prep_grabix_indexes(in_files, dirs, data):
         out = _bgzip_from_cram(in_files[0], dirs, data)
     else:
         out = run_multicore(_bgzip_from_fastq,
-                            [[{"in_file": x, "dirs": dirs, "config": data["config"]}] for x in in_files if x],
+                            [[{"in_file": x, "dirs": dirs, "config": data["config"], "rgnames": data["rgnames"]}]
+                             for x in in_files if x],
                             data["config"])
     items = [[{"bgzip_file": x, "config": copy.deepcopy(data["config"])}] for x in out if x]
     run_multicore(_grabix_index, items, data["config"])
@@ -296,7 +303,7 @@ def _is_gzip_empty(fname):
                                     stderr=open("/dev/null", "w"))
     return int(count) < 1
 
-def _bgzip_from_bam(bam_file, dirs, config, is_retry=False):
+def _bgzip_from_bam(bam_file, dirs, config, is_retry=False, output_infix=''):
     """Create bgzipped fastq files from an input BAM file.
     """
     # tools
@@ -307,7 +314,7 @@ def _bgzip_from_bam(bam_file, dirs, config, is_retry=False):
     bgzip = tools.get_bgzip_cmd(config, is_retry)
     # files
     work_dir = utils.safe_makedir(os.path.join(dirs["work"], "align_prep"))
-    out_file_1 = os.path.join(work_dir, "%s-1.fq.gz" % os.path.splitext(os.path.basename(bam_file))[0])
+    out_file_1 = os.path.join(work_dir, "%s%s-1.fq.gz" % (os.path.splitext(os.path.basename(bam_file))[0], output_infix))
     if bam.is_paired(bam_file):
         out_file_2 = out_file_1.replace("-1.fq.gz", "-2.fq.gz")
     else:
@@ -381,17 +388,18 @@ def _bgzip_from_fastq(data):
         needs_bgzip, needs_gunzip = False, False
     else:
         needs_bgzip, needs_gunzip = True, False
+    work_dir = utils.safe_makedir(os.path.join(data["dirs"]["work"], "align_prep"))
     if needs_bgzip or needs_gunzip or needs_convert or objectstore.is_remote(in_file):
-        out_file = _bgzip_file(in_file, data["dirs"], config, needs_bgzip, needs_gunzip,
-                               needs_convert)
+        out_file = _bgzip_file(in_file, config, work_dir,
+                               needs_bgzip, needs_gunzip, needs_convert)
     else:
-        out_file = in_file
+        out_file = os.path.join(work_dir, "%s_%s" % (dd.get_sample_name(data), os.path.basename(in_file)))
+        utils.symlink_plus(in_file, out_file)
     return [out_file]
 
-def _bgzip_file(in_file, dirs, config, needs_bgzip, needs_gunzip, needs_convert):
+def _bgzip_file(in_file, config, work_dir, needs_bgzip, needs_gunzip, needs_convert):
     """Handle bgzip of input file, potentially gunzipping an existing file.
     """
-    work_dir = utils.safe_makedir(os.path.join(dirs["work"], "align_prep"))
     out_file = os.path.join(work_dir, os.path.basename(in_file) +
                             (".gz" if not in_file.endswith(".gz") else ""))
     if not utils.file_exists(out_file):
@@ -420,9 +428,13 @@ def _bgzip_file(in_file, dirs, config, needs_bgzip, needs_gunzip, needs_convert)
 
 def _check_gzipped_input(in_file, grabix, needs_convert):
     """Determine if a gzipped input file is blocked gzip or standard.
+
     """
-    is_bgzip = subprocess.check_output([grabix, "check", in_file])
-    if is_bgzip.strip() == "yes" and not needs_convert:
-        return False, False
-    else:
-        return True, True
+    # grabix is not parsing bgzip output from FASTQ correctly and will hang
+    # indexing indefinitely. Until we can identify the issue, we re-bgzip everyting
+    return True, True
+    # is_bgzip = subprocess.check_output([grabix, "check", in_file])
+    # if is_bgzip.strip() == "yes" and not needs_convert:
+    #     return False, False
+    # else:
+    #     return True, True

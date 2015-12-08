@@ -132,6 +132,18 @@ def subset_bam_by_region(in_file, region, config, out_file_base=None):
                             out_bam.write(read)
     return out_file
 
+def subset_bed_by_chrom(in_file, chrom, data, out_dir=None):
+    """Subset a BED file to only have items from the specified chromosome.
+    """
+    if out_dir is None:
+        out_dir = os.path.dirname(in_file)
+    base, ext = os.path.splitext(os.path.basename(in_file))
+    out_file = os.path.join(out_dir, "%s-%s%s" % (base, chrom, ext))
+    if not utils.file_uptodate(out_file, in_file):
+        with file_transaction(data, out_file) as tx_out_file:
+            _rewrite_bed_with_chrom(in_file, tx_out_file, chrom)
+    return out_file
+
 def _rewrite_bed_with_chrom(in_file, out_file, chrom):
     with open(in_file) as in_handle:
         with open(out_file, "w") as out_handle:
@@ -162,7 +174,7 @@ def remove_lcr_regions(orig_bed, items):
     if lcr_bed:
         nolcr_bed = os.path.join("%s-nolcr.bed" % (utils.splitext_plus(orig_bed)[0]))
         with file_transaction(items[0], nolcr_bed) as tx_nolcr_bed:
-            pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(lcr_bed)).saveas(tx_nolcr_bed)
+            pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(lcr_bed), nonamecheck=True).saveas(tx_nolcr_bed)
         # If we have a non-empty file, convert to the LCR subtracted for downstream analysis
         if utils.file_exists(nolcr_bed):
             orig_bed = nolcr_bed
@@ -172,9 +184,16 @@ def remove_highdepth_regions(in_file, items):
     """Remove high depth regions from a BED file for analyzing a set of calls.
 
     Tries to avoid spurious errors and slow run times in collapsed repeat regions.
+
+    Also adds ENCODE blacklist regions which capture additional collapsed repeats
+    around centromeres.
     """
+    from bcbio.variation import bedutils
     highdepth_beds = filter(lambda x: x is not None,
                             list(set([tz.get_in(["config", "algorithm", "highdepth_regions"], x) for x in items])))
+    encode_bed = tz.get_in(["genome_resources", "variation", "encode_blacklist"], items[0])
+    if encode_bed and os.path.exists(encode_bed):
+        highdepth_beds.append(encode_bed)
     out_file = "%s-glimit%s" % utils.splitext_plus(in_file)
     if not utils.file_uptodate(out_file, in_file):
         with file_transaction(items[0], out_file) as tx_out_file:
@@ -183,11 +202,12 @@ def remove_highdepth_regions(in_file, items):
                 if len(highdepth_beds) > 0:
                     with open(all_file, "w") as out_handle:
                         for line in fileinput.input(highdepth_beds):
-                            out_handle.write(line)
+                            parts = line.split("\t")
+                            out_handle.write("\t".join(parts[:4]).rstrip() + "\n")
                 if utils.file_exists(all_file):
-                    to_remove = pybedtools.BedTool(all_file).sort(stream=True)\
-                                                            .merge(c=4, o="distinct", delim=",").saveas()
-                    pybedtools.BedTool(in_file).intersect(to_remove, v=True, nonamecheck=True).saveas(tx_out_file)
+                    to_remove = bedutils.sort_merge(all_file, items[0])
+                    cmd = "bedtools subtract -nonamecheck -a {in_file} -b {to_remove} > {tx_out_file}"
+                    do.run(cmd.format(**locals()), "Remove high depth regions")
                 else:
                     utils.symlink_plus(in_file, out_file)
     return out_file

@@ -7,7 +7,6 @@ import shutil
 
 import numpy
 import toolz as tz
-import vcf
 import yaml
 
 from bcbio import broad, utils
@@ -19,7 +18,7 @@ from bcbio.variation import vcfutils
 # ## General functionality
 
 def hard_w_expression(vcf_file, expression, data, name="+", filterext="",
-                      extra_cmd=""):
+                      extra_cmd="", limit_regions="variant_regions"):
     """Perform hard filtering using bcftools expressions like %QUAL < 20 || DP < 4.
     """
     base, ext = utils.splitext_plus(vcf_file)
@@ -29,7 +28,8 @@ def hard_w_expression(vcf_file, expression, data, name="+", filterext="",
             if vcfutils.vcf_has_variants(vcf_file):
                 bcftools = config_utils.get_program("bcftools", data["config"])
                 bgzip_cmd = "| bgzip -c" if out_file.endswith(".gz") else ""
-                variant_regions = utils.get_in(data, ("config", "algorithm", "variant_regions"))
+                variant_regions = (utils.get_in(data, ("config", "algorithm", "variant_regions"))
+                                   if limit_regions == "variant_regions" else None)
                 intervals = ("-T %s" % vcfutils.bgzip_and_index(variant_regions, data["config"])
                              if variant_regions else "")
                 cmd = ("{bcftools} filter -O v {intervals} --soft-filter '{name}' "
@@ -157,6 +157,7 @@ def _freebayes_hard(in_file, data):
 def _do_high_depth_filter(data):
     """Check if we should do high depth filtering -- only on germline non-regional calls.
     """
+    return True
     is_genome = tz.get_in(["config", "algorithm", "coverage_interval"], data, "").lower() == "genome"
     is_paired = vcfutils.get_paired_phenotype(data)
     return is_genome and not is_paired
@@ -178,13 +179,12 @@ def _calc_vcf_stats(in_file):
 def _average_called_depth(in_file):
     """Retrieve the average depth of called reads in the provided VCF.
     """
+    import cyvcf2
     depths = []
-    with utils.open_gzipsafe(in_file) as in_handle:
-        reader = vcf.Reader(in_handle, in_file)
-        for rec in reader:
-            d = rec.INFO.get("DP")
-            if d is not None:
-                depths.append(d)
+    for rec in cyvcf2.VCF(in_file):
+        d = rec.INFO.get("DP")
+        if d is not None:
+            depths.append(int(d))
     return int(math.ceil(numpy.mean(depths)))
 
 def platypus(in_file, data):
@@ -208,8 +208,12 @@ def samtools(in_file, data):
 
 def gatk_snp_hard(in_file, data):
     """Perform hard filtering on GATK SNPs using best-practice recommendations.
+
+    We have a more lenient mapping quality (MQ) filter compared to GATK defaults.
+    The recommended filter (MQ < 40) is too stringent, so we adjust to 30: 
+    http://imgur.com/a/oHRVB
     """
-    filters = ["QD < 2.0", "MQ < 40.0", "FS > 60.0",
+    filters = ["QD < 2.0", "MQ < 30.0", "FS > 60.0",
                "MQRankSum < -12.5", "ReadPosRankSum < -8.0"]
     # GATK Haplotype caller (v2.2) appears to have much larger HaplotypeScores
     # resulting in excessive filtering, so avoid this metric

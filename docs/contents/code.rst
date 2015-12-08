@@ -49,6 +49,10 @@ conflict, it's useful to understand the design approaches:
   isolates debugging to individual functions rather than globally
   mutable state.
 
+- Make sure your changes integrate correctly by running the test suite before submitting a pull request.
+  the pipeline is automatically tested in `Travis-CI`_, and a red label will appear in the pull request if
+  the former causes any issue.
+
 Overview
 ========
 
@@ -113,6 +117,26 @@ methods.
 .. _Anaconda: http://docs.continuum.io/anaconda/index.html
 .. _virtualenv-burrito: https://github.com/brainsik/virtualenv-burrito
 .. _Python Env Wrapper: https://github.com/berdario/invewrapper
+
+Building the documentation locally
+==================================
+If you have added or modified this documentation, to build it locally and see how it looks like you can do so by running::
+
+    cd docs
+    make html
+
+The documentation will be built under ``docs/_build/html``, open ``index.html`` with your browser to
+load your local build.
+
+If you want to use the same theme that Read The Docs uses, you can do so by installing ``sphinx_rtd_theme`` via
+``pip``. You will also need to add this in the ``docs/conf.py`` file to use the theme only locally::
+
+  html_theme = 'default'
+  on_rtd = os.environ.get('READTHEDOCS', False)
+  if not on_rtd:  # only import and set the theme if we're building docs locally
+      import sphinx_rtd_theme
+      html_theme = 'sphinx_rtd_theme'
+      html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 Adding tools
 ============
@@ -225,7 +249,10 @@ during a data installation::
 Add configuration information to bcbio-nextgen by creating a
 ``config/genomes/DBKEY-resources.yaml`` file. Copy an existing minimal
 template like ``canFam3`` and edit with pointers to snpEff and other genome
-resources.
+resources. The `VEP database directory <ftp://ftp.ensembl.org/pub/current_variation/VEP/>`_
+has Ensembl names. SnpEff has a command to list available databases::
+
+    snpEff databases
 
 Finally, send pull requests for CloudBioLinux and bcbio-nextgen and we'll
 happily integrate the new genome.
@@ -474,3 +501,4 @@ implementations.
 .. _pipeline.main: https://github.com/chapmanb/bcbio-nextgen/blob/master/bcbio/pipeline/main.py
 .. _ipython wrapper: https://github.com/chapmanb/bcbio-nextgen/blob/master/bcbio/distributed/ipython.py
 .. _multicore wrapper: https://github.com/chapmanb/bcbio-nextgen/blob/master/bcbio/distributed/multi.py
+.. _Travis-CI: https://travis-ci.org/chapmanb/bcbio-nextgen

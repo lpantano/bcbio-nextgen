@@ -43,7 +43,7 @@ def update_w_custom(config, lane_info):
 
 # ## Retrieval functions
 
-def load_system_config(config_file, work_dir=None):
+def load_system_config(config_file=None, work_dir=None):
     """Load bcbio_system.yaml configuration file, handling standard defaults.
 
     Looks for configuration file in default location within
@@ -167,6 +167,8 @@ def get_program(name, config, ptype="cmd", default=None):
     YAML. The preferred location for program information is in
     `resources` but the older `program` tag is also supported.
     """
+    # support taking in the data dictionary
+    config = config.get("config", config)
     try:
         pconfig = config.get("resources", {})[name]
         # If have leftover old
@@ -194,6 +196,9 @@ def _get_check_program_cmd(fn):
         for adir in os.environ['PATH'].split(":"):
             if is_ok(os.path.join(adir, program)):
                 return os.path.join(adir, program)
+        # support bioconda installed programs
+        if is_ok(os.path.join(os.path.dirname(sys.executable), name)):
+            return (os.path.join(os.path.dirname(sys.executable), name))
         else:
             raise CmdNotFound(" ".join(map(repr, (fn.func_name, name, config, default))))
     return wrap
@@ -381,7 +386,9 @@ def use_vqsr(algs):
         callers = alg.get("variantcaller", "gatk")
         if isinstance(callers, basestring):
             callers = [callers]
-        elif not callers:  # no variant calling, no VQSR
+        if not callers:  # no variant calling, no VQSR
+            continue
+        if "vqsr" in alg.get("tools_off", []):  # VQSR turned off
             continue
         for c in callers:
             if c in vqsr_callers:

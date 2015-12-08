@@ -10,11 +10,18 @@ import sys
 
 LOOKUPS = {
     "config": {"keys": ['config']},
+    "tmp_dir": {"keys": ['config', 'resources', 'tmp', 'dir']},
     "num_cores": {"keys": ['config', 'algorithm', 'num_cores'],
                   "default": 1},
     "priority_regions": {"keys": ['config', 'algorithm', 'priority_regions']},
+    "problem_region_dir": {"keys": ["config", "algorithm", "problem_region_dir"]},
+    "genome_build": {"keys": ["genome_build"]},
     "gtf_file": {"keys": ['genome_resources', 'rnaseq', 'transcripts'],
                  "checker": file_exists},
+    "srna_gtf_file": {"keys": ['genome_resources', 'srnaseq', 'srna-transcripts'],
+                      "checker": file_exists},
+    "mirbase_ref": {"keys": ['genome_resources', 'srnaseq', 'mirbase'],
+                      "checker": file_exists},
     "gene_bed": {"keys": ['genome_resources', 'rnaseq', 'gene_bed'],
                  "checker": file_exists},
     "work_dir": {"keys": ['dirs', 'work']},
@@ -26,15 +33,19 @@ LOOKUPS = {
     "sample_name": {"keys": ['rgnames', 'sample']},
     "strandedness": {"keys": ['config', 'algorithm', 'strandedness'],
                      "default": "unstranded"},
+    "analysis": {"keys": ["analysis"]},
     "square_vcf": {"keys": ['square_vcf']},
     "ploidy": {"keys": ['config', 'algorithm', 'ploidy'], "default": 2},
     "gender": {"keys": ["metadata", "sex"], "default": ""},
     "batch": {"keys": ["metadata", "batch"]},
+    "phenotype": {"keys": ["metadata", "phenotype"], "default": ""},
     "hetcaller": {"keys": ["config", "algorithm", "hetcaller"]},
     "variantcaller": {"keys": ['config', 'algorithm', 'variantcaller']},
     "work_bam": {"keys": ["work_bam"]},
     "count_file": {"keys": ["count_file"]},
     "combined_counts": {"keys": ["combined_counts"]},
+    "mirna_counts": {"keys": ["mirna_counts"]},
+    "isomir_counts": {"keys": ["isomir_counts"]},
     "annotated_combined_counts": {"keys": ["annotated_combined_counts"]},
     "ref_file": {"keys": ["reference", "fasta", "base"]},
     "dexseq_gff": {"keys": ['genome_resources', 'rnaseq', 'dexseq']},
@@ -48,10 +59,16 @@ LOOKUPS = {
     "dexseq_counts": {"keys": ['dexseq_counts']},
     "description": {"keys": ['description']},
     "aligner": {"keys": ['config', 'algorithm', 'aligner']},
+    "platform": {"keys": ['config', 'algorithm', 'platform'],
+                 "default": "illumina"},
     "quality_format": {"keys": ['config', 'algorithm', 'quality_format'],
                        "default": "standard"},
     "adapters": {"keys": ['config', 'algorithm', 'adapters'],
                  "default": []},
+    "custom_trim": {"keys": ['config', 'algorithm', 'custom_trim'],
+                 "default": []},
+    "species": {"keys": ['config', 'algorithm', 'species'],
+                 "default": None},
     "variation_resources": {"keys": ["genome_resources", "variation"], "default": {}},
     "qsig_file": {"keys": ['genome_resources', 'variation', 'qsignature'],
                   "checker": file_exists},
@@ -59,9 +76,14 @@ LOOKUPS = {
                     "default": False},
     "cufflinks_dir": {"keys": ['cufflinks_dir']},
     "rsem": {"keys": ["config", "algorithm", "rsem"], "default": False},
+    "transcriptome_align": {"keys": ["config", "algorithm", "transcriptome_align"],
+                            "default": False},
+    "expression_caller": {"keys": ["config", "algorithm", "expression_caller"],
+                          "default": []},
     "transcriptome_bam": {"keys": ["transcriptome_bam"]},
     "fpkm_isoform": {"keys": ["fpkm_isoform"]},
     "fpkm": {"keys": ["fpkm"]},
+    "galaxy_dir": {"keys": ["dirs", "galaxy"]},
     "assembled_gtf": {"keys": ["assembled_gtf"]},
     "assemble_transcripts": {"keys": ["config", "algorithm", "assemble_transcripts"],
                              "default": False},
@@ -70,13 +92,37 @@ LOOKUPS = {
     "vrn_file": {"keys": ["vrn_file"]},
     "variant_regions": {"keys": ["config", "algorithm", "variant_regions"]},
     "callable_regions": {"keys": ["regions", "callable"]},
+    "callable_min_size": {"keys": ["config", "algorithm", "callable_min_size"],
+                          "default": 1000000},
+    "min_allele_fraction": {"keys": ["config", "algorithm", "min_allele_fraction"]},
     "offtarget_stats": {"keys": ["regions", "offtarget_stats"]},
+    "sailfish": {"keys": ["sailfish"]},
+    "sailfish_dir": {"keys": ["sailfish_dir"]},
+    "sailfish_tidy": {"keys": ["sailfish_tidy"]},
+    "sailfish_transcript_tpm": {"keys": ["sailfish_transcript_tpm"]},
+    "sailfish_gene_tpm": {"keys": ["sailfish_gene_tpm"]},
     "sample_callable": {"keys": ["regions", "sample_callable"]},
     "coverage_interval": {"keys": ["config", "algorithm", "coverage_interval"]},
-    "coverage_regions": {"keys": ["config", "algorithm", "coverage"]},
+    "coverage": {"keys": ["config", "algorithm", "coverage"]},
+    "report": {"keys": ["config", "algorithm", "report"]},
+    "coverage_depth_min": {"keys": ["config", "algorithm", "coverage_depth_min"],
+                           "default": 4},
+    "joint_group_size": {"keys": ["config", "algorithm", "joint_group_size"],
+                         "default": 200},
+    "coverage": {"keys": ["config", "algorithm", "coverage"]},
     "deduped_bam": {"keys": ["deduped_bam"]},
-    "align_bam": {"keys": ["align_bam"]}
+    "align_bam": {"keys": ["align_bam"]},
+    "tools_off": {"keys": ["config", "algorithm", "tools_off"], "default": []},
+    "tools_on": {"keys": ["config", "algorithm", "tools_on"], "default": []},
+    "cwl_reporting": {"keys": ["config", "algorithm", "cwl_reporting"]},
 }
+
+def get_batches(data):
+    batches = get_batch(data)
+    if batches:
+        if not isinstance(batches, (list, tuple)):
+            batches = [batches]
+        return batches
 
 def get_input_sequence_files(data, default=None):
     """
@@ -130,6 +176,15 @@ def setter(keys, checker):
         return tz.update_in(config, keys, lambda x: value, default=value)
     return update
 
+def is_setter(keys):
+    def present(config):
+        try:
+            value = tz.get_in(keys, config, no_default=True)
+        except:
+            value = False
+        return True if value else False
+    return present
+
 """
 generate the getter and setter functions but don't override any explicitly
 defined
@@ -143,6 +198,9 @@ for k, v in LOOKUPS.items():
     setter_fn = 'set_' + k
     if setter_fn not in _g:
         _g["set_" + k] = setter(keys, v.get('checker', None))
+    is_setter_fn = "is_set" + k
+    if is_setter_fn not in _g:
+        _g["is_set_" + k] = is_setter(keys)
 
 def sample_data_iterator(samples):
     """
@@ -150,3 +208,12 @@ def sample_data_iterator(samples):
     """
     for sample in samples:
         yield sample[0]
+
+def get_in_samples(samples, fn):
+    """
+    for a list of samples, return the value of a global option
+    """
+    for sample in samples:
+        if fn(sample[0], None):
+            return fn(sample[0])
+    return None

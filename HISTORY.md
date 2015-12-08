@@ -1,9 +1,163 @@
-## 0.9.0 (in progress)
+## 0.9.5 (in progress)
+
+- Enable calling of HLA alleles with human build 38 (hg38). Turn on with the
+  `hlacaller` option.
+- Structural variant prioritization with BED files of known biologically
+  important regions. Extracts SV calls in these regions and produces a tab
+  delimited high level summary. Use the `svprioritize` option to enable.
+- Add tRNA count and figures by tdrmapper for srna-seq pipeline.
+- Avoid running callability checks on smaller chromosomes less than 1 million
+  basepairs. Saves computation and disk IO on alt and support regions we don't
+  split on.
+- Enable nested batch specifications, allowing samples in partially overlapping
+  batches.
+- Speed improvements for Lumpy genotyping. Move to latest svtyper and avoid
+  genotyping breakends.
+- Allow use of VEP annotations on non-human analyses.
+- Remove ENCODE blacklist regions when calling with VarDict and FreeBayes on
+  whole genomes. Avoids long run times due to collapsed repeats near centromeres.
+- Update VarScan to 2.4.0 and rework support to allow piping between mpileup
+  and VarScan to avoid filesystem IO.
+- Annotate ensemble calls with information about supporting callers. Thanks to
+  Pär Larsson and Son Pham.
+- Move eXpress to expression_caller instead of being run by default.
+- rRNA calculation uses the count file instead of using counts from GATK.
+- Merge STAR fusion calls back into the BAM file. Thanks to Miika Ahdesmaki.
+- Added preliminary support for the hisat2 aligner.
+- Swapped STAR indexing to use on the fly splice junction indexing.
+- Slightly inceased default DEXseq memory requirements in bcbio_system.yaml.
+- Add support for RNA-seq for hg38 and hg38-noalt
+- Make Sailfish the default for non-count based expression estimation.
+  Produces isoform-level (combined.isoform.sf.tpm) and gene-level
+  (combined.gene.sf.tpm) TPM expression estimation.
+- Move Cufflinks to be off by default for expression estimation (turn on via
+  expression_callers if needed).
+- Add STAR fusion gene parameters suggested by @felixschlesinger.
+- Add disambiguation to Sailfish by creating a master FASTA file of all transcripts from
+  all organisms, quantitating each and separating out the organism-specific
+  transcripts after.
+
+## 0.9.4 (14 October 2015)
+
+- Ensure genome data sort order is identical to BED files when annotating
+  structural variant calls. Thanks To Miika Ahdesmaki.
+- Improve low frequency calling for VarDict using vaidation against DREAM
+  synthetic dataset 4.
+- Install truth sets for germline and cancer calling automatically as part of
+  bcbio and make it easy to include them in the configuration files for
+  validation.
+- Avoid need to set LD_LIBRARY_PATH and PERL5LIB on installations.
+- Update Scalpel to latest version (0.5.1) and improve sensitivity for low
+  frequency indels: http://imgur.com/a/7Dzd3
+- Drop `coverage_depth_max` for downsampling, which no longer works in GATK 3.4.
+  The option wasn't supported by other callers so was more confusing than useful.
+- Fix missing BAM index when running with `align: false`. Thanks to Stephan
+  Pabinger and Severine Catreux.
+- Annotate structural variant files with snpEff. Initial steps towards
+  summarized structural variant reporting.
+- Add ability to specify platform unit (PU) and library (LB) in BAM header.
+  Thanks to Brad Wubbenhorst.
+- Update gatk-framework to 3.4-46 to avoid errors dealing with new gVCF output.
+- Set java.io.tmpdir to avoid filling up global temporary space with snpEff.
+  Thanks to Oliver Hofmann.
+- Speed up transcriptome-only processing. Thanks to Sven-Eric Schelhorn.
+- Add bamtools output to RNA-seq quality metrics. Thanks to Sven-Eric Schelhorn.
+- Expand input quality format detection to detect full range of possible Sanger values.
+
+## 0.9.3 (27 September 2015)
+
+- Fix bug when using tumors with multiple normals and no CNV calling. Additional
+  tumor sample would get lost due to lack of early (CNV-based) calling. Thanks
+  to Miika Ahdesmaki.
+- Include R and Rscript in the installation with conda packages and use for
+  installing and running R-based tools. Avoids issues with alternative R
+  versions and need for a separate installation.
+- Fix bug when using CNVkit on disambiguated inputs. Thanks to Miika Ahdesmaki.
+- Re-work structural variant infrastructure to provide plug-in parallel ensemble calling,
+  removing the previous overlap-based ensemble calls. Currently supports MetaSV for
+  ensemble calls. Also re-works validation to not rely on ensemble-overlap calls.
+- Default to using Real Time Genomics vcfeval (https://github.com/RealTimeGenomics/rtg-tools)
+  for validation instead of bcbio.variation. Improves speed and resolution of
+  closely spaced variants. The old funtionality is still available with
+  `validate_method: bcbio.variation`.
+- Correctly apply BQSR when using recalibration with PrintReads by using GATK
+  full instead of the open source GATK framework which silently ignores BQSR
+  option. Thanks to Severine Catreux.
+- Require larger blocks (250bp, moved from 100bp) to find regions for splitting analysis
+  to avoid too tight splitting around small homozygous deletions.
+- Adjust mapping quality (MQ) filter for GATK SNP hard filters to improve sensitivity
+  http://imgur.com/a/oHRVB
+- Ensure memory specification passed to sambamba and samtools sort during
+  disambiguation and RNA-seq. Thanks to Sven-Eric Schelhorn.
+- Fix compatbility with bedtools groupby in v2.25.0, which needs short
+  parameters instead of long parameter names.
+- Allow turning off variant quality score recalibration with `tools_off: [vqsr]`
+- Generalize group size for batching gVCFs prior to joint calling with
+  `joint_group_size`. Thanks to Severine Catreux.
+- Support GEMINI 0.17.0, which does not have a --no-bcolz option since that is
+the default.
+- Remove test_run parameter since it was poorly supported and not used much.
+- Fix issue with featureCounts sorting not working in parallel by pre-sorting
+and filtering the BAM file.
+- Unified stock coverage and experimental coverage reporting.
+- Deprecated `report` and `coverage_experimental` as algorithm keys.
+
+## 0.9.2 (1 September 2015)
+
+- Support IPython 4.0 with ipyparallel
+- Fix bug in writing BAM and VCF indexes to final directory. Correctly add
+  indexes as bam.bai and vcf.gz.tbi.
+- Fix bug in queryname sorting on split files for feeding into diambiguation.
+  Ensure proper sorting with explicity sambamba sort. Thanks to Sven-Eric
+  Schelhorn.
+- Ensure extra FreeBayes alleles get removed prior to vcfallelicprimatives,
+  avoiding leaving incorrect genotype allele fields. Thanks to Michael
+  Schroeder.
+- Split CNVkit processing into individual components, enabling better
+  parallelization and control over parameters.
+- Genotype Lumpy structural variant calls with SVtyper.
+- Initial support for small RNA pipeline. Thanks to Lorena Pantano.
+- Support for MetaSV to prepare combined structural variant calls.
+- Add smallRNA-seq pipeline
+- Test automatic report for variants calling and standard pipeline.
+- Allow Cufflinks to be turned off via tools_off.
+
+## 0.9.1 (6 August 2015)
+
+- Fix novoalign to work with parallel split alignments. Thanks to Tyler Funnell.
+- Move lumpy-sv to latest version which uses lumpyexpress instead of speedseq.
+- Support the manta SV caller from Illumina. Validations: http://imgur.com/a/Gajsg
+- Remove high depth regions from structural variant calling exclusion file
+  to avoid false positives with lumpy. Thanks to Miika Ahdesmaki.
+- Move some structural variant calling, like CNV detection, prior to variant
+  calling. Allows use of CNV calls as inputs for variant detection tools.
+- Generalize support for interaction with blob storage and graphing to support
+  alternative cloud providers. Initial support for interacting with Azure.
+  Thanks to Alexandru Coman.
+- Remove VarDict call lines where reference and alternative allele are
+  identical.
+- Fix assignment issues during prioritization with new GEMINI and sqlite.
+- Support updated versions of sambamba, which provide headers for window depth
+  commands.
+
+## 0.9.0 (20 June 2015)
 
 - GATK 3.4: support HaplotypeCaller by avoiding setting downsampling (-dcov)
   option by default.
 - Single sample structural variant calling: corectly handle multiple variant
   callers. Thanks to Sven-Eric Schelhorn.
+- Make VarDictJava the default caller when `vardict` specified. `vardict-perl`
+  is now required to specifically use the Perl version.
+- VarDict and VarDictJava: limit regions to 1Mb with overlaps to avoid memory
+  errors. Ignore regions without BED reads which can lead to large genomic
+  sections and memory errors.
+- VarDict and VarDictJava: annotate outputs with dbSNP.
+- Add `tools_on` configuration with `svplots` option. This turns off structural
+  variant plotting by default, which can be time consuming compared to calling.
+- Add a `--only-metadata` argument to template preparation that will only
+  include BAM or fastq files in sample YAML if they are present in the metadata
+  CSV file.
+- samblaster: support -M flag in 0.1.22 release
 - Fix VEP/GEMINI incompatibility where empty fields are included in VCF output.
 - VarDict: restrict maximum region size within a BED file to 2Mb to avoid high
   memory usage and failures for longer regions.

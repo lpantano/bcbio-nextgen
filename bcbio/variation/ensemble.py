@@ -19,7 +19,7 @@ from bcbio.log import logger
 from bcbio.pipeline import config_utils
 from bcbio.pipeline import datadict as dd
 from bcbio.provenance import do
-from bcbio.variation import population, validate, vcfutils
+from bcbio.variation import population, validate, vcfutils, multi
 
 def combine_calls(batch_id, samples, data):
     """Combine multiple callsets into a final set of merged calls.
@@ -36,7 +36,7 @@ def combine_calls(batch_id, samples, data):
             break
     if exist_variants:
         if "classifiers" not in edata["config"]["algorithm"]["ensemble"]:
-            callinfo = _run_ensemble_intersection(batch_id, vrn_files, base_dir, edata)
+            callinfo = _run_ensemble_intersection(batch_id, vrn_files, caller_names, base_dir, edata)
         else:
             config_file = _write_config_file(batch_id, caller_names, base_dir, edata)
             callinfo = _run_ensemble(batch_id, vrn_files, config_file, base_dir,
@@ -82,12 +82,7 @@ def _group_by_batches(samples, check_fn):
     extras = []
     for data in [x[0] for x in samples]:
         if check_fn(data):
-            batch = data.get("metadata", {}).get("batch")
-            if batch:
-                batch_groups[batch].append(data)
-            else:
-                assert data["name"][-1] not in batch_groups
-                batch_groups[data["name"][-1]] = [data]
+            batch_groups[multi.get_batch_for_key(data)].append(data)
         else:
             extras.append([data])
     return batch_groups, extras
@@ -188,7 +183,7 @@ def _get_num_pass(data, n):
         return int(math.ceil(float(trusted_pct) * n))
     return 2
 
-def _run_ensemble_intersection(batch_id, vrn_files, base_dir, edata):
+def _run_ensemble_intersection(batch_id, vrn_files, callers, base_dir, edata):
     """Run intersection n out of x based ensemble method using bcbio.variation.recall.
     """
     out_vcf_file = os.path.join(base_dir, "{0}-ensemble.vcf.gz".format(batch_id))
@@ -196,10 +191,9 @@ def _run_ensemble_intersection(batch_id, vrn_files, base_dir, edata):
         num_pass = _get_num_pass(edata, len(vrn_files))
         cmd = [config_utils.get_program("bcbio-variation-recall", edata["config"]),
                "ensemble", "--cores=%s" % edata["config"]["algorithm"].get("num_cores", 1),
-               "--numpass", str(num_pass)]
-        # Remove filtered calls if we're dealing with tumor/normal calls
-        if vcfutils.get_paired_phenotype(edata):
-            cmd += ["--nofiltered"]
+               "--numpass", str(num_pass), "--names", ",".join(callers)]
+        # Remove filtered calls, do not try to rescue
+        cmd += ["--nofiltered"]
         cmd += [out_vcf_file, dd.get_ref_file(edata)] + vrn_files
         do.run(cmd, "Ensemble intersection calling: %s" % (batch_id))
     in_data = utils.deepish_copy(edata)

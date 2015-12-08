@@ -12,8 +12,7 @@ from bcbio import utils, bam, broad
 from bcbio.log import logger
 from bcbio.distributed import objectstore
 from bcbio.pipeline.merge import merge_bam_files
-from bcbio.bam import fastq, callable, highdepth
-from bcbio.bam.trim import trim_adapters
+from bcbio.bam import fastq, callable, highdepth, trim
 from bcbio.ngsalign import postalign
 from bcbio.pipeline.fastq import get_fastq_files
 from bcbio.pipeline.alignment import align_to_sort_bam
@@ -23,21 +22,14 @@ from bcbio.variation import multi as vmulti
 import bcbio.pipeline.datadict as dd
 from bcbio.pipeline.fastq import merge as fq_merge
 from bcbio.bam import merge as bam_merge
+from bcbio.bam import skewer
 
 def prepare_sample(data):
     """Prepare a sample to be run, potentially converting from BAM to
     FASTQ and/or downsampling the number of reads for a test run
     """
-    NUM_DOWNSAMPLE = 10000
     logger.debug("Preparing %s" % data["rgnames"]["sample"])
     file1, file2 = get_fastq_files(data)
-    if data.get("test_run", False):
-        if bam.is_bam(file1):
-            file1 = bam.downsample(file1, data, NUM_DOWNSAMPLE)
-            file2 = None
-        else:
-            file1, file2 = fastq.downsample(file1, file2, data,
-                                            NUM_DOWNSAMPLE, quick=True)
     data["files"] = [file1, file2]
     return [[data]]
 
@@ -45,21 +37,20 @@ def trim_sample(data):
     """Trim from a sample with the provided trimming method.
     Support methods: read_through.
     """
-    to_trim = [x for x in data["files"] if x is not None]
     config = data["config"]
     # this block is to maintain legacy configuration files
     trim_reads = config["algorithm"].get("trim_reads", False)
+    sample_name = dd.get_sample_name(data)
     if not trim_reads:
-        logger.info("Skipping trimming of %s." % (", ".join(to_trim)))
+        logger.info("Skipping trimming of %s." % sample_name)
         return [[data]]
 
-    out_dir = os.path.join(dd.get_work_dir(data), "trimmed")
-    utils.safe_makedir(out_dir)
-
     if trim_reads == "read_through":
-        logger.info("Trimming low quality ends and read through adapter "
-                    "sequence from %s." % (", ".join(to_trim)))
-        out_files = trim_adapters(to_trim, out_dir, config)
+        if "skewer" in dd.get_tools_on(data):
+            trim_adapters = skewer.trim_adapters
+        else:
+            trim_adapters = trim.trim_adapters
+        out_files = trim_adapters(data)
         data["files"] = out_files
     return [[data]]
 
@@ -89,10 +80,12 @@ def _add_supplemental_bams(data):
                 data[sup_key][supext] = test_file
     return data
 
-def process_alignment(data):
+def process_alignment(data, alt_input=None):
     """Do an alignment of fastq files, preparing a sorted BAM output file.
     """
     fastq1, fastq2 = dd.get_input_sequence_files(data)
+    if alt_input:
+        fastq1, fastq2 = alt_input
     config = data["config"]
     aligner = config["algorithm"].get("aligner", None)
     if fastq1 and objectstore.file_exists_or_remote(fastq1) and aligner:
@@ -116,18 +109,22 @@ def process_alignment(data):
         else:
             out_bam = link_bam_file(fastq1, os.path.join(data["dirs"]["work"], "prealign",
                                                          data["rgnames"]["sample"]))
+        bam.index(out_bam, data["config"])
         bam.check_header(out_bam, data["rgnames"], data["sam_ref"], data["config"])
         dedup_bam = postalign.dedup_bam(out_bam, data)
+        bam.index(dedup_bam, data["config"])
         data["work_bam"] = dedup_bam
     elif fastq1 and objectstore.file_exists_or_remote(fastq1) and fastq1.endswith(".cram"):
         data["work_bam"] = fastq1
     elif fastq1 is None and "vrn_file" in data:
         data["config"]["algorithm"]["variantcaller"] = False
         data["work_bam"] = None
+    elif not fastq1:
+        raise ValueError("No 'files' specified for input sample: %s" % dd.get_sample_name(data))
     else:
         raise ValueError("Could not process input file from sample configuration. \n" +
                          fastq1 +
-                         "\nIs the path to the file correct?\n" +
+                         "\nIs the path to the file correct or is empty?\n" +
                          "If it is a fastq file (not pre-aligned BAM or CRAM), "
                          "is an aligner specified in the input configuration?")
     return [[data]]
@@ -155,6 +152,7 @@ def postprocess_alignment(data):
         callable_region_bed, nblock_bed, callable_bed = \
             callable.block_regions(data["work_bam"], ref_file, data)
         highdepth_bed = highdepth.identify(data)
+        bam.index(data["work_bam"], data["config"])
         sample_callable = callable.sample_callable_bed(data["work_bam"], ref_file, data)
         offtarget_stats = callable.calculate_offtarget(data["work_bam"], ref_file, data)
         data["regions"] = {"nblock": nblock_bed, "callable": callable_bed, "highdepth": highdepth_bed,

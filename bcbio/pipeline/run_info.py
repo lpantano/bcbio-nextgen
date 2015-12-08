@@ -3,8 +3,10 @@
 This handles two methods of getting processing information: from a Galaxy
 next gen LIMS system or an on-file YAML configuration.
 """
+import collections
 from contextlib import closing
 import copy
+import glob
 import itertools
 import os
 import string
@@ -26,7 +28,7 @@ from bcbio.bam.fastq import open_fastq
 ALGORITHM_NOPATH_KEYS = ["variantcaller", "realign", "recalibrate",
                          "phasing", "svcaller", "hetcaller", "jointcaller", "tools_off", "mixup_check"]
 
-def organize(dirs, config, run_info_yaml, sample_names):
+def organize(dirs, config, run_info_yaml, sample_names=None, add_provenance=True):
     """Organize run information from a passed YAML file or the Galaxy API.
 
     Creates the high level structure used for subsequent processing.
@@ -62,19 +64,27 @@ def organize(dirs, config, run_info_yaml, sample_names):
                 tmp_dir = genome.abs_file_paths(tmp_dir)
             item["config"]["resources"]["tmp"]["dir"] = tmp_dir
         out.append(item)
-    out = _add_provenance(out, dirs, config)
+    out = _add_provenance(out, dirs, config, add_provenance)
     return out
 
-def _add_provenance(items, dirs, config):
-    p = programs.write_versions(dirs, config)
-    versioncheck.testall(items)
-    p_db = diagnostics.initialize(dirs)
+def normalize_world(data):
+    """Normalize a data object, useful after serializetion via CWL.
+    """
+    data = _normalize_files(data)
+    return data
+
+def _add_provenance(items, dirs, config, add_provenance=True):
+    if add_provenance:
+        p = programs.write_versions(dirs, config=config)
+        versioncheck.testall(items)
+        p_db = diagnostics.initialize(dirs)
     out = []
     for item in items:
-        entity_id = diagnostics.store_entity(item)
-        item["config"]["resources"]["program_versions"] = p
-        item["provenance"] = {"programs": p, "entity": entity_id,
-                              "db": p_db}
+        if add_provenance:
+            entity_id = diagnostics.store_entity(item)
+            item["config"]["resources"]["program_versions"] = p
+            item["provenance"] = {"programs": p, "entity": entity_id,
+                                "db": p_db}
         out.append([item])
     return out
 
@@ -82,6 +92,11 @@ def setup_directories(work_dir, fc_dir, config, config_file):
     fastq_dir, galaxy_dir, config_dir = _get_full_paths(flowcell.get_fastq_dir(fc_dir)
                                                         if fc_dir else None,
                                                         config, config_file)
+    # check default install for tool data if not found locally
+    if not os.path.exists(os.path.join(galaxy_dir, "tool-data")):
+        _, config_file = config_utils.load_system_config(work_dir=work_dir)
+        if os.path.exists(os.path.join(os.path.dirname(config_file), "tool-data")):
+            galaxy_dir = os.path.dirname(config_file)
     return {"fastq": fastq_dir, "galaxy": galaxy_dir,
             "work": work_dir, "flowcell": fc_dir, "config": config_dir}
 
@@ -133,14 +148,56 @@ def add_reference_resources(data):
     data["genome_resources"] = genome.get_resources(data["genome_build"], ref_loc, data)
     if effects.get_type(data) == "snpeff":
         data["reference"]["snpeff"] = effects.get_snpeff_files(data)
-    alt_genome = utils.get_in(data, ("config", "algorithm", "validate_genome_build"))
-    if alt_genome:
-        data["reference"]["alt"] = {alt_genome:
-                                    genome.get_refs(alt_genome, None, data["dirs"]["galaxy"], data)["fasta"]}
+    data = _fill_validation_targets(data)
+    data = _fill_prioritization_targets(data)
     # Re-enable when we have ability to re-define gemini configuration directory
     if False:
         if population.do_db_build([data], check_gemini=False, need_bam=False):
             data["reference"]["gemini"] = population.get_gemini_files(data)
+    return data
+
+def _fill_validation_targets(data):
+    """Fill validation targets pointing to globally installed truth sets.
+    """
+    ref_file = dd.get_ref_file(data)
+    sv_targets = zip(itertools.repeat("svvalidate"),
+                     tz.get_in(["config", "algorithm", "svvalidate"], data, {}).keys())
+    for vtarget in [list(xs) for xs in [["validate"], ["validate_regions"]] + sv_targets]:
+        val = tz.get_in(["config", "algorithm"] + vtarget, data)
+        if val and not os.path.exists(val):
+            installed_val = os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir, "validation", val))
+            if os.path.exists(installed_val):
+                data = tz.update_in(data, ["config", "algorithm"] + vtarget, lambda x: installed_val)
+            else:
+                raise ValueError("Configuration problem. Validation file not found for %s: %s" %
+                                 (vtarget, val))
+    return data
+
+def _fill_prioritization_targets(data):
+    """Fill in globally installed files for prioritization.
+    """
+    ref_file = dd.get_ref_file(data)
+    for target in [["svprioritize"]]:
+        val = tz.get_in(["config", "algorithm"] + target, data)
+        if val and not os.path.exists(val):
+            installed_vals = glob.glob(os.path.normpath(os.path.join(os.path.dirname(ref_file), os.pardir,
+                                                                     "coverage", "prioritize", val + "*.bed.gz")))
+            if len(installed_vals) == 0:
+                raise ValueError("Configuration problem. Prioritization file not found for %s: %s" %
+                                 (target, val))
+            elif len(installed_vals) == 1:
+                installed_val = installed_vals[0]
+            else:
+                # check for partial matches
+                installed_val = None
+                for v in installed_vals:
+                    if v.endswith(val + ".bed.gz"):
+                        installed_val = v
+                        break
+                # handle date-stamped inputs
+                if not installed_val:
+                    installed_val = sorted(installed_vals, reverse=True)[0]
+            data = tz.update_in(data, ["config", "algorithm"] + target, lambda x: installed_val)
     return data
 
 # ## Sample and BAM read group naming
@@ -191,9 +248,10 @@ def prep_rg_names(item, config, fc_name, fc_date):
     return {"rg": item["lane"],
             "sample": item["description"],
             "lane": lane_name,
-            "pl": item.get("algorithm", {}).get("platform",
-                                                config.get("algorithm", {}).get("platform", "illumina")).lower(),
-            "pu": lane_name}
+            "pl": (tz.get_in(["algorithm", "platform"], item)
+                   or tz.get_in(["algorithm", "platform"], item, "illumina")).lower(),
+            "lb": tz.get_in(["metadata", "library"], item),
+            "pu": tz.get_in(["metadata", "platform_unit"], item) or lane_name}
 
 # ## Configuration file validation
 
@@ -234,6 +292,35 @@ def _check_for_batch_clashes(xs):
         raise ValueError("Batch names must be unique from sample descriptions.\n"
                          "Clashing batch names: %s" % sorted(list(dups)))
 
+def _check_for_problem_somatic_batches(items, config):
+    """Identify problem batch setups for somatic calling.
+
+    We do not support multiple tumors in a single batch and VarDict(Java) does not
+    handle pooled calling, only tumor/normal.
+    """
+    to_check = []
+    for data in items:
+        data = copy.deepcopy(data)
+        data["config"] = config_utils.update_w_custom(config, data)
+        to_check.append(data)
+    data_by_batches = collections.defaultdict(list)
+    for data in to_check:
+        batches = dd.get_batches(data)
+        if batches:
+            for batch in batches:
+                data_by_batches[batch].append(data)
+    for batch, items in data_by_batches.items():
+        if vcfutils.get_paired(items):
+            vcfutils.check_paired_problems(items)
+        elif len(items) > 1:
+            vcs = list(set(tz.concat([dd.get_variantcaller(data) or [] for data in items])))
+            if any(x.lower().startswith("vardict") for x in vcs):
+                raise ValueError("VarDict does not support pooled non-tumor/normal calling, in batch %s: %s"
+                                 % (batch, [dd.get_sample_name(data) for data in items]))
+            elif any(x.lower() == "mutect" for x in vcs):
+                raise ValueError("Mutect requires a 'phenotype: tumor' sample for calling, in batch %s: %s"
+                                 % (batch, [dd.get_sample_name(data) for data in items]))
+
 def _check_for_misplaced(xs, subkey, other_keys):
     """Ensure configuration keys are not incorrectly nested under other keys.
     """
@@ -250,29 +337,36 @@ def _check_for_misplaced(xs, subkey, other_keys):
                                    ["% 15s | % 15s | % 15s" % (a, b, c) for (a, b, c) in problems]))
 
 ALGORITHM_KEYS = set(["platform", "aligner", "bam_clean", "bam_sort",
-                      "trim_reads", "adapters", "custom_trim", "kraken",
-                      "align_split_size", "quality_bin", "rsem",
+                      "trim_reads", "adapters", "custom_trim", "species", "kraken",
+                      "align_split_size", "quality_bin", "transcriptome_align",
                       "quality_format", "write_summary", "merge_bamprep",
                       "coverage", "coverage_interval", "ploidy", "indelcaller",
                       "variantcaller", "jointcaller", "variant_regions",
-                      "effects", "mark_duplicates", "svcaller", "svvalidate", "hetcaller",
+                      "effects", "mark_duplicates",
+                      "svcaller", "svvalidate", "svprioritize",
+                      "hlacaller", "hlavalidate",
+                      "sv_regions", "hetcaller", "problem_region_dir",
                       "recalibrate", "realign", "phasing", "validate",
-                      "validate_regions", "validate_genome_build",
+                      "validate_regions", "validate_genome_build", "validate_method",
                       "clinical_reporting", "nomap_split_size",
                       "nomap_split_targets", "ensemble", "background",
                       "disambiguate", "strandedness", "fusion_mode",
-                      "min_read_length", "coverage_depth_min",
-                      "coverage_depth_max", "min_allele_fraction",
-                      "remove_lcr",
-                      "archive", "tools_off", "assemble_transcripts",
-                      "mixup_check", "priority_regions"] +
+                      "min_read_length", "coverage_depth_min", "callable_min_size",
+                      "min_allele_fraction",
+                      "remove_lcr", "joint_group_size",
+                      "archive", "tools_off", "tools_on", "assemble_transcripts",
+                      "mixup_check", "priority_regions", "expression_caller"] +
+                     # development
+                     ["cwl_reporting"] +
                      # back compatibility
-                      ["coverage_depth"])
-ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr", "clinical_reporting",
-                          "fusion_mode", "rsem", "assemble_transcripts", "trim_reads",
-                          "recalibrate", "realign"])
+                      ["coverage_depth_max", "coverage_depth"])
+ALG_ALLOW_BOOLEANS = set(["merge_bamprep", "mark_duplicates", "remove_lcr",
+                          "clinical_reporting", "transcriptome_align",
+                          "fusion_mode", "assemble_transcripts", "trim_reads",
+                          "recalibrate", "realign", "cwl_reporting"])
 ALG_ALLOW_FALSE = set(["aligner", "bam_clean", "bam_sort",
-                       "effects", "phasing", "mixup_check", "indelcaller", "variantcaller"])
+                       "effects", "phasing", "mixup_check", "indelcaller",
+                       "variantcaller"])
 
 ALG_DOC_URL = "https://bcbio-nextgen.readthedocs.org/en/latest/contents/configuration.html#algorithm-parameters"
 
@@ -316,11 +410,10 @@ def _check_toplevel_misplaced(item):
 
 
 def _detect_fastq_format(in_file, MAX_RECORDS=1000):
-    ranges = {"sanger": (33, 73),
-              "solexa": (59, 104),
-              "illumina_1.3+": (64, 104),
-              "illumina_1.5+": (66, 104),
-              "illumina_1.8+": (35, 74)}
+    ranges = {"sanger": (33, 126),
+              "solexa": (59, 126),
+              "illumina_1.3+": (64, 126),
+              "illumina_1.5+": (66, 126)}
 
     gmin, gmax = 99, 0
     possible = set(ranges.keys())
@@ -365,7 +458,7 @@ def _check_quality_format(items):
                              "is not supported. Supported values are %s."
                              % (SAMPLE_FORMAT.values()))
 
-        fastq_file = next((file for file in item.get('files', []) if
+        fastq_file = next((file for file in item.get('files') or [] if
                            any([ext for ext in fastq_extensions if ext in file])), None)
 
         if fastq_file and specified_format and not objectstore.is_remote(fastq_file):
@@ -413,7 +506,7 @@ def _check_jointcaller(data):
         raise ValueError("Unexpected algorithm 'jointcaller' parameter: %s\n"
                          "Supported options: %s\n" % (problem, sorted(list(allowed))))
 
-def _check_sample_config(items, in_file):
+def _check_sample_config(items, in_file, config):
     """Identify common problems in input sample configuration files.
     """
     logger.info("Checking sample YAML configuration: %s" % in_file)
@@ -421,6 +514,7 @@ def _check_sample_config(items, in_file):
     _check_for_duplicates(items, "lane")
     _check_for_duplicates(items, "description")
     _check_for_batch_clashes(items)
+    _check_for_problem_somatic_batches(items, config)
     _check_for_misplaced(items, "algorithm",
                          ["resources", "metadata", "analysis",
                           "description", "genome_build", "lane", "files"])
@@ -454,7 +548,7 @@ def _file_to_abs(x, dnames, makedir=False):
                     return normx
         raise ValueError("Did not find input file %s in %s" % (x, dnames))
 
-def _normalize_files(item, fc_dir):
+def _normalize_files(item, fc_dir=None):
     """Ensure the files argument is a list of absolute file names.
     Handles BAM, single and paired end fastq.
     """
@@ -488,7 +582,7 @@ def _sanity_check_files(item, files):
     if msg:
         raise ValueError("%s for %s: %s" % (msg, item.get("description", ""), files))
 
-def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
+def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names=None):
     """Read run information from a passed YAML file.
     """
     with open(run_info_yaml) as in_handle:
@@ -511,7 +605,8 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
         global_vars = global_config.pop("globals", {})
         resources = global_config.pop("resources", {})
         loaded = loaded["details"]
-    loaded = [x for x in loaded if x["description"] in sample_names]
+    if sample_names:
+        loaded = [x for x in loaded if x["description"] in sample_names]
 
     run_details = []
     for i, item in enumerate(loaded):
@@ -534,7 +629,8 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
                 upload["fc_name"] = fc_name
                 upload["fc_date"] = fc_date
             upload["run_id"] = ""
-            upload["dir"] = _file_to_abs(upload["dir"], [dirs.get("work")], makedir=True)
+            if upload.get("dir"):
+                upload["dir"] = _file_to_abs(upload["dir"], [dirs.get("work")], makedir=True)
             item["upload"] = upload
         item["algorithm"] = _replace_global_vars(item["algorithm"], global_vars)
         item["algorithm"] = genome.abs_file_paths(item["algorithm"],
@@ -542,11 +638,14 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
         item["genome_build"] = str(item.get("genome_build", ""))
         item["algorithm"] = _add_algorithm_defaults(item["algorithm"])
         item["rgnames"] = prep_rg_names(item, config, fc_name, fc_date)
-        item["test_run"] = global_config.get("test_run", False)
         if item.get("files"):
             item["files"] = [genome.abs_file_paths(f) for f in item["files"]]
+        elif "files" in item:
+            del item["files"]
         if item.get("vrn_file") and isinstance(item["vrn_file"], basestring):
-            item["vrn_file"] = vcfutils.bgzip_and_index(genome.abs_file_paths(item["vrn_file"]), config)
+            inputs_dir = utils.safe_makedir(os.path.join(dirs.get("work", os.getcwd()), "inputs"))
+            item["vrn_file"] = vcfutils.bgzip_and_index(genome.abs_file_paths(item["vrn_file"]), config,
+                                                        remove_orig=False, out_dir=inputs_dir)
         item = _clean_metadata(item)
         item = _clean_algorithm(item)
         # Add any global resource specifications
@@ -558,7 +657,7 @@ def _run_info_from_yaml(dirs, run_info_yaml, config, sample_names):
             for key, val in pkvs.iteritems():
                 item["resources"][prog][key] = val
         run_details.append(item)
-    _check_sample_config(run_details, run_info_yaml)
+    _check_sample_config(run_details, run_info_yaml, config)
     return run_details
 
 def _item_is_bam(item):
@@ -571,9 +670,9 @@ def _add_algorithm_defaults(algorithm):
     Converts allowed multiple inputs into lists if specified as a single item.
     """
     defaults = {"archive": [],
-                "min_allele_fraction": 10.0,
-                "tools_off": []}
-    convert_to_list = set(["archive", "tools_off", "hetcaller"])
+                "tools_off": [],
+                "tools_on": []}
+    convert_to_list = set(["archive", "tools_off", "tools_on", "hetcaller"])
     for k, v in defaults.items():
         if k not in algorithm:
             algorithm[k] = v
@@ -581,6 +680,8 @@ def _add_algorithm_defaults(algorithm):
         if k in convert_to_list:
             if v and not isinstance(v, (list, tuple)):
                 algorithm[k] = [v]
+            elif v is None:
+                algorithm[k] = []
     return algorithm
 
 def _replace_global_vars(xs, global_vars):
@@ -614,3 +715,15 @@ def clean_name(xs):
     if final[-1] == safec:
         final = final[:-1]
     return "".join(final)
+
+def prep_system(run_info_yaml, bcbio_system=None):
+    """Prepare system configuration information from an input configuration file.
+
+    This does the work of parsing the system input file and setting up directories
+    for use in 'organize'.
+    """
+    work_dir = os.getcwd()
+    config, config_file = config_utils.load_system_config(bcbio_system, work_dir)
+    dirs = setup_directories(work_dir, os.path.normpath(os.path.dirname(os.path.dirname(run_info_yaml))),
+                             config, config_file)
+    return [dirs, config, run_info_yaml]

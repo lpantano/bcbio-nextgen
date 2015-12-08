@@ -6,16 +6,20 @@ import collections
 from contextlib import closing
 import os
 
+import numpy
 import pybedtools
 import pysam
 import toolz as tz
+import yaml
 
 from bcbio import bam, utils
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
 from bcbio.bam import callable
 from bcbio.ngsalign import postalign
+from bcbio.pipeline import datadict as dd
 from bcbio.pipeline import shared, config_utils
 from bcbio.provenance import do
+from bcbio.structural import regions
 from bcbio.variation import population
 
 # ## Case/control
@@ -60,48 +64,64 @@ def has_variant_regions(items, base_file, chrom=None):
                 return False
     return True
 
-def remove_exclude_regions(orig_bed, base_file, items):
+def remove_exclude_regions(orig_bed, base_file, items, remove_entire_feature=False):
     """Remove centromere and short end regions from an existing BED file of regions to target.
     """
     out_bed = os.path.join("%s-noexclude.bed" % (utils.splitext_plus(base_file)[0]))
     exclude_bed = prepare_exclude_file(items, base_file)
     with file_transaction(items[0], out_bed) as tx_out_bed:
-        pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(exclude_bed)).saveas(tx_out_bed)
+        pybedtools.BedTool(orig_bed).subtract(pybedtools.BedTool(exclude_bed),
+                                              A=remove_entire_feature, nonamecheck=True).saveas(tx_out_bed)
     if utils.file_exists(out_bed):
         return out_bed
     else:
         return orig_bed
 
-def prepare_exclude_file(items, base_file, chrom=None):
-    """Prepare a BED file for exclusion, incorporating variant regions and chromosome.
+def get_base_cnv_regions(data, work_dir):
+    """Retrieve set of target regions for CNV analysis.
 
-    Excludes locally repetitive regions (if `remove_lcr` is set) and
-    centromere regions, both of which contribute to long run times and
+    Subsets to extended transcript regions for WGS experiments to avoid
+    long runtimes.
+    """
+    cov_interval = dd.get_coverage_interval(data)
+    base_regions = regions.get_sv_bed(data)
+    # if we don't have a configured BED or regions to use for SV caling
+    if not base_regions:
+        # For genome calls, subset to regions within 10kb of genes
+        if cov_interval == "genome":
+            base_regions = regions.get_sv_bed(data, "transcripts1e4", work_dir)
+            if base_regions:
+                base_regions = remove_exclude_regions(base_regions, base_regions, [data])
+        # Finally, default to the defined variant regions
+        if not base_regions:
+            base_regions = dd.get_variant_regions(data)
+    return base_regions
+
+def prepare_exclude_file(items, base_file, chrom=None):
+    """Prepare a BED file for exclusion.
+
+    Excludes high depth and centromere regions which contribute to long run times and
     false positive structural variant calls.
     """
-    out_file = "%s-exclude.bed" % utils.splitext_plus(base_file)[0]
-    all_vrs = _get_variant_regions(items)
-    ready_region = (shared.subset_variant_regions(tz.first(all_vrs), chrom, base_file, items)
-                    if len(all_vrs) > 0 else chrom)
-    with shared.bedtools_tmpdir(items[0]):
-        # Get a bedtool for the full region if no variant regions
-        if ready_region == chrom:
+    out_file = "%s-exclude%s.bed" % (utils.splitext_plus(base_file)[0], "-%s" % chrom if chrom else "")
+    if not utils.file_exists(out_file) and not utils.file_exists(out_file + ".gz"):
+        with shared.bedtools_tmpdir(items[0]):
+            # Get a bedtool for the full region if no variant regions
             want_bedtool = callable.get_ref_bedtool(tz.get_in(["reference", "fasta", "base"], items[0]),
                                                     items[0]["config"], chrom)
-            lcr_bed = shared.get_lcr_bed(items)
-            if lcr_bed:
-                want_bedtool = want_bedtool.subtract(pybedtools.BedTool(lcr_bed))
-        else:
-            want_bedtool = pybedtools.BedTool(ready_region).saveas()
-        sv_exclude_bed = _get_sv_exclude_file(items)
-        if sv_exclude_bed and len(want_bedtool) > 0:
-            want_bedtool = want_bedtool.subtract(sv_exclude_bed).saveas()
-        if not utils.file_exists(out_file) and not utils.file_exists(out_file + ".gz"):
+            if chrom:
+                want_bedtool = pybedtools.BedTool(shared.subset_bed_by_chrom(want_bedtool.saveas().fn,
+                                                                             chrom, items[0]))
+            sv_exclude_bed = _get_sv_exclude_file(items)
+            if sv_exclude_bed and len(want_bedtool) > 0:
+                want_bedtool = want_bedtool.subtract(sv_exclude_bed, nonamecheck=True).saveas()
+            if any(dd.get_coverage_interval(d) == "genome" for d in items):
+                want_bedtool = pybedtools.BedTool(shared.remove_highdepth_regions(want_bedtool.saveas().fn, items))
             with file_transaction(items[0], out_file) as tx_out_file:
                 full_bedtool = callable.get_ref_bedtool(tz.get_in(["reference", "fasta", "base"], items[0]),
                                                         items[0]["config"])
                 if len(want_bedtool) > 0:
-                    full_bedtool.subtract(want_bedtool).saveas(tx_out_file)
+                    full_bedtool.subtract(want_bedtool, nonamecheck=True).saveas(tx_out_file)
                 else:
                     full_bedtool.saveas(tx_out_file)
     return out_file
@@ -149,7 +169,6 @@ def _find_to_filter(in_file, exclude_file, params, to_exclude):
     We look for ends with a large percentage in a repeat or where the end contains
     an entire repeat.
     """
-    import pybedtools
     for feat in pybedtools.BedTool(in_file).intersect(pybedtools.BedTool(exclude_file), wao=True, nonamecheck=True):
         us_chrom, us_start, us_end, name, other_chrom, other_start, other_end, overlap = feat.fields
         if float(overlap) > 0:
@@ -171,15 +190,15 @@ def _create_end_file(in_file, coord, params, out_file):
                     start, end = curpos, curpos + params["end_buffer"]
                 else:
                     start, end = curpos - params["end_buffer"], curpos
-                out_handle.write("\t".join([parts[0], str(start),
-                                            str(end), name])
-                                 + "\n")
+                if start > 0:
+                    out_handle.write("\t".join([parts[0], str(start),
+                                                str(end), name])
+                                     + "\n")
     return out_file
 
 def get_sv_chroms(items, exclude_file):
     """Retrieve chromosomes to process on, avoiding extra skipped chromosomes.
     """
-    import pybedtools
     exclude_regions = {}
     for region in pybedtools.BedTool(exclude_file):
         if int(region.start) == 0:
@@ -213,7 +232,7 @@ def _extract_split_and_discordants(in_bam, work_dir, data):
                         samblaster_cl = postalign.samblaster_dedup_sort(data, tx_dedup_file,
                                                                         tx_sr_file, tx_disc_file)
                         out_base = os.path.join(tmpdir,
-                                                "%s-namesort" % os.path.splitext(os.path.dirname(in_bam))[0])
+                                                "%s-namesort" % os.path.splitext(os.path.basename(in_bam))[0])
                         cmd = ("{samtools} sort -n -@ {cores} -m {mem} -O sam -T {out_base} {in_bam} | ")
                         cmd = cmd.format(**locals()) + samblaster_cl
                         do.run(cmd, "samblaster: split and discordant reads", data)
@@ -263,3 +282,43 @@ def outname_from_inputs(in_files):
     while base.endswith(("-", "_", ".")):
         base = base[:-1]
     return base
+
+# -- Insert size calculation
+
+def insert_size_stats(dists):
+    """Calcualtes mean/median and MAD from distances, avoiding outliers.
+
+    MAD is the Median Absolute Deviation: http://en.wikipedia.org/wiki/Median_absolute_deviation
+    """
+    med = numpy.median(dists)
+    filter_dists = filter(lambda x: x < med + 10 * med, dists)
+    median = numpy.median(filter_dists)
+    return {"mean": float(numpy.mean(filter_dists)), "std": float(numpy.std(filter_dists)),
+            "median": float(median),
+            "mad": float(numpy.median([abs(x - median) for x in filter_dists]))}
+
+def calc_paired_insert_stats(in_bam, nsample=1000000):
+    """Retrieve statistics for paired end read insert distances.
+    """
+    dists = []
+    n = 0
+    with closing(pysam.Samfile(in_bam, "rb")) as in_pysam:
+        for read in in_pysam:
+            if read.is_proper_pair and read.is_read1:
+                n += 1
+                dists.append(abs(read.isize))
+                if n >= nsample:
+                    break
+    return insert_size_stats(dists)
+
+def calc_paired_insert_stats_save(in_bam, stat_file, nsample=1000000):
+    """Calculate paired stats, saving to a file for re-runs.
+    """
+    if utils.file_exists(stat_file):
+        with open(stat_file) as in_handle:
+            return yaml.safe_load(in_handle)
+    else:
+        stats = calc_paired_insert_stats(in_bam, nsample)
+        with open(stat_file, "w") as out_handle:
+            yaml.safe_dump(stats, out_handle, default_flow_style=False, allow_unicode=False)
+        return stats

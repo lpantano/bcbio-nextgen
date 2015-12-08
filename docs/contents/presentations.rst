@@ -1,8 +1,35 @@
 Presentations
 =============
 
-- Overview of variant calling for `NGS Data Analysis Course at Harvard Medical School <https://wiki.harvard.edu/confluence/display/hbctraining/NGS+Data+Analysis+Course+Application%2C+Spring+2015>`
-  (19 May 2015): `slides <https://github.com/chapmanb/bcbb/blob/master/talks/ngscourse2015_teaching/variant_ngscourse.pdf>`
+- Materials from :ref:`teaching` oriented example at Cold Spring Harbor
+  Laboratory's `Advanced Sequencing Technology and Applications course
+  <http://meetings.cshl.edu/courses.aspx?course=C-SEQTEC&year=15>`_.
+  (18 November 2015): `slides
+  <https://github.com/chapmanb/bcbb/blob/master/talks/cshl2015_bcbio/cshl2015_bcbio.pdf>`_
+
+- Supporting the common workflow language and Docker in bcbio
+  `Bio in Docker symposium
+  <http://core.brc.iop.kcl.ac.uk/events/compbio-docker-symposium-2015/>`_
+  (9 November 2015): `slides
+  <https://github.com/chapmanb/bcbb/blob/master/talks/bioindocker2015_bcbio/chapman_bioindocker.pdf>`_
+
+- Validation on human build 38, HLA typing, low frequency cancer calling and
+  structural variation for `Boston Bioinformatics Interest Group (BIG) meeting
+  <http://openwetware.org/wiki/BioMicroCenter:BIG_meeting>`_
+  (5 November 2015):
+  `slides <https://github.com/chapmanb/bcbb/blob/master/talks/big2015_bcbio/big2015_bcbio.pdf>`_
+
+- Presentation on Research Scientist Careers for `Iowa State Bioinformatics
+  Course <https://bcbio.las.iastate.edu/>`_ (23 September 2015): `slides
+  <https://github.com/chapmanb/bcbb/blob/master/talks/2015_iowast_career/chapman_career.pdf>`_
+
+- Prioritization of structural variants based on known biological information at
+  `BOSC 2015 <http://www.open-bio.org/wiki/BOSC_2015>`_ (10 July 2015): `slides
+  <https://github.com/chapmanb/bcbb/blob/master/talks/bosc2015_bcbio_prioritize/bosc2015_bcbio_prioritize.pdf>`_;
+  `video <https://www.youtube.com/watch?v=JZnF_6UnajY&feature=youtu.be>`_
+
+- Overview of variant calling for `NGS Data Analysis Course at Harvard Medical School <https://wiki.harvard.edu/confluence/display/hbctraining/NGS+Data+Analysis+Course+Application%2C+Spring+2015>`_
+  (19 May 2015): `slides <https://github.com/chapmanb/bcbb/blob/master/talks/ngscourse2015_teaching/variant_ngscourse.pdf>`_
 
 - `NGS Glasgow <http://biotexcel.com/event/ngs-2015-glasgow/>`_ (23 April 2015):
   `slides <https://dl.dropboxusercontent.com/u/407047/Work/Presentations/20150420%20NGS%20Glasgow.pdf>`_
@@ -145,9 +172,9 @@ Links from the presentation
 .. _Conda: http://www.continuum.io/blog/conda
 .. _documentation: bcbio-nextgen.readthedocs.org
 .. _Arvados framework: https://arvados.org/
-.. _improved scaling for NGS workflows: http://bcbio.wordpress.com/2013/05/22/scaling-variant-detection-pipelines-for-whole-genome-sequencing-analysis/
-.. _aligners and callers: http://bcbio.wordpress.com/2013/05/06/framework-for-evaluating-variant-detection-methods-comparison-of-aligners-and-callers/
-.. _minimal BAM preparation workflows: http://bcbio.wordpress.com/2013/10/21/updated-comparison-of-variant-detection-methods-ensemble-freebayes-and-minimal-bam-preparation-pipelines/
+.. _improved scaling for NGS workflows: http://bcb.io/2013/05/22/scaling-variant-detection-pipelines-for-whole-genome-sequencing-analysis/
+.. _aligners and callers: http://bcb.io/2013/05/06/framework-for-evaluating-variant-detection-methods-comparison-of-aligners-and-callers/
+.. _minimal BAM preparation workflows: http://bcb.io/2013/10/21/updated-comparison-of-variant-detection-methods-ensemble-freebayes-and-minimal-bam-preparation-pipelines/
 .. _Coverage assessment: https://github.com/chapmanb/bcbio.coverage
 .. _Mt Sinai workshop website: http://www.hpcwire.com/event/strategies-accelerating-genomic-sequencing-pipeline/
 .. _Mt Sinai workshop slides: https://github.com/chapmanb/bcbb/raw/master/talks/mtsinai2013_bcbio_nextgen/chapman_mtsinai_bcbio.pdf

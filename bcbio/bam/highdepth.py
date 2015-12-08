@@ -32,7 +32,7 @@ def identify(data):
     min_coverage = 10
     window_size = 250
     work_bam, out_file, stats_file = _get_files(data)
-    if not os.path.exists(out_file):
+    if not os.path.exists(out_file) and dd.get_coverage_interval(data) == "genome":
         cores = dd.get_num_cores(data)
         with file_transaction(data, out_file) as tx_out_file:
             tx_raw_file = "%s-raw%s" % utils.splitext_plus(tx_out_file)
@@ -40,13 +40,17 @@ def identify(data):
             cmd = ("sambamba depth window -t {cores} -c {min_coverage} "
                    "--window-size {window_size} {work_bam} "
                    "| head -n {sample_size} "
-                   "| cut -f 5 | {py_cl} -l 'numpy.median([float(x) for x in l])'")
-            median_cov = float(subprocess.check_output(cmd.format(**locals()), shell=True))
-            if not numpy.isnan(median_cov):
+                   """| cut -f 5 | {py_cl} -l 'numpy.median([float(x) for x in l if not x.startswith("mean")])'""")
+            try:
+                median_cov = float(subprocess.check_output(cmd.format(**locals()), shell=True))
+            except ValueError:
+                median_cov = None
+            if median_cov and not numpy.isnan(median_cov):
                 high_thresh = int(high_multiplier * median_cov)
                 cmd = ("sambamba depth window -t {cores} -c {median_cov} "
                        "--window-size {window_size} -T {high_thresh} {work_bam} "
-                       "| {py_cl} -fx 'float(x.split()[5]) >= {high_percentage}' "
+                       "| {py_cl} -fx 'float(x.split()[5]) >= {high_percentage} "
+                       """if not x.startswith("#") else None' """
                        "| cut -f 1-3,7 > {tx_raw_file} ")
                 do.run(cmd.format(**locals()), "Identify high coverage regions")
                 with open(stats_file, "w") as out_handle:

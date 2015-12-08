@@ -1,5 +1,4 @@
-version: 4
+version: 6
 
 aliases:
-  ensembl: danio_rerio_vep_79_Zv9
   snpeff: Zv9.78

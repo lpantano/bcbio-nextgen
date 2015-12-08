@@ -2,50 +2,48 @@
 
 https://github.com/jewmanchue/wham
 """
-import csv
+import collections
 import os
-import subprocess
-import sys
 
-import numpy as np
-import toolz as tz
-try:
-    import vcf
-except ImportError:
-    vcf = None
+import vcf
 
 from bcbio import utils
+from bcbio.distributed.multi import run_multicore, zeromq_aware_logging
 from bcbio.distributed.transaction import file_transaction
+from bcbio.heterogeneity import chromhacks
 from bcbio.pipeline import datadict as dd
-from bcbio.structural import ensemble, shared
-from bcbio.variation import bedutils, vcfutils
+from bcbio.pipeline import region
+from bcbio.structural import shared
+from bcbio.variation import bamprep, effects, vcfutils
 from bcbio.provenance import do
 
 def run(items, background=None):
     """Detect copy number variations from batched set of samples using WHAM.
     """
     if not background: background = []
+    background_bams = []
     paired = vcfutils.get_paired_bams([x["align_bam"] for x in items], items)
     if paired:
         inputs = [paired.tumor_data]
-        background_bams = [paired.normal_bam]
-        background_names = [paired.normal_name]
+        if paired.normal_bam:
+            background = [paired.normal_data]
+            background_bams = [paired.normal_bam]
     else:
         assert not background
         inputs, background = shared.find_case_control(items)
         background_bams = [x["align_bam"] for x in background]
-        background_names = [dd.get_sample_name(x) for x in background]
-    orig_vcf_file = _run_wham(inputs, background_bams)
-    wclass_vcf_file = _add_wham_classification(orig_vcf_file, inputs)
-    vcf_file = _fix_vcf(wclass_vcf_file, inputs, background_names)
-    bed_file = _convert_to_bed(vcf_file, inputs, use_lrt=len(background_bams) > 0)
+    orig_vcf = _run_wham(inputs, background_bams)
     out = []
-    for data in items:
+    for data in inputs:
         if "sv" not in data:
             data["sv"] = []
+        sample_vcf = "%s-%s.vcf.gz" % (utils.splitext_plus(orig_vcf)[0], dd.get_sample_name(data))
+        sample_vcf = vcfutils.select_sample(orig_vcf, dd.get_sample_name(data), sample_vcf, data["config"])
+        if background:
+            sample_vcf = filter_by_background(sample_vcf, orig_vcf, background, data)
+        effects_vcf, _ = effects.add_to_vcf(sample_vcf, data, "snpeff")
         data["sv"].append({"variantcaller": "wham",
-                           "vrn_file": _subset_to_sample(bed_file, data),
-                           "vcf_file": vcf_file})
+                           "vrn_file": effects_vcf or sample_vcf})
         out.append(data)
     return out
 
@@ -56,176 +54,87 @@ def _sv_workdir(data):
 def _run_wham(inputs, background_bams):
     """Run WHAM on a defined set of inputs and targets.
     """
-    out_file = os.path.join(_sv_workdir(inputs[0]), "%s-wham.vcf" % dd.get_sample_name(inputs[0]))
-    input_bams = [x["align_bam"] for x in inputs]
+    out_file = os.path.join(_sv_workdir(inputs[0]), "%s-wham.vcf.gz" % dd.get_sample_name(inputs[0]))
     if not utils.file_exists(out_file):
         with file_transaction(inputs[0], out_file) as tx_out_file:
+            coords = chromhacks.autosomal_or_x_coords(dd.get_ref_file(inputs[0]))
+            parallel = {"type": "local", "cores": dd.get_cores(inputs[0]), "progs": []}
+            rs = run_multicore(_run_wham_coords,
+                                [(inputs, background_bams, coord, out_file)
+                                 for coord in coords],
+                                inputs[0]["config"], parallel)
+            rs = {coord: fname for (coord, fname) in rs}
+            vcfutils.concat_variant_files([rs[c] for c in coords], tx_out_file, coords,
+                                          dd.get_ref_file(inputs[0]), inputs[0]["config"])
+    return out_file
+
+@utils.map_wrap
+@zeromq_aware_logging
+def _run_wham_coords(inputs, background_bams, coords, final_file):
+    """Run WHAM on a specific set of chromosome, start, end coordinates.
+    """
+    base, ext = utils.splitext_plus(final_file)
+    raw_file = "%s-%s.vcf" % (base, region.to_safestr(coords))
+    all_bams = ",".join([x["align_bam"] for x in inputs] + background_bams)
+    if not utils.file_exists(raw_file):
+        with file_transaction(inputs[0], raw_file) as tx_raw_file:
             cores = dd.get_cores(inputs[0])
-            background = "-b %s" % ",".join(background_bams) if background_bams else ""
-            target_bams = ",".join(x["align_bam"] for x in inputs)
-            target_bed = shared.remove_exclude_regions(
-                tz.get_in(["config", "algorithm", "variant_regions"], inputs[0]), out_file, inputs)
             ref_file = dd.get_ref_file(inputs[0])
-            target_str = "-e %s" % target_bed if target_bed else ""
-            cmd = ("WHAM-BAM -x {cores} -f {ref_file} -t {target_bams} {background} {target_str} > {tx_out_file}")
-            do.run(cmd.format(**locals()), "Run WHAM")
+            coord_str = bamprep.region_to_gatk(coords)
+            opts = "-k -m 30"
+            cmd = ("WHAM-GRAPHENING {opts} -x {cores} -a {ref_file} -f {all_bams} -r {coord_str} "
+                   "> {tx_raw_file}")
+            do.run(cmd.format(**locals()), "Run WHAM: %s" % region.to_safestr(coords))
+    merge_vcf = _run_wham_merge(raw_file, inputs[0])
+    gt_vcf = _run_wham_genotype(merge_vcf, all_bams, coords, inputs[0])
+    prep_vcf = vcfutils.sort_by_ref(gt_vcf, inputs[0])
+    return [[coords, prep_vcf]]
+
+def _run_wham_genotype(in_file, all_bams, coords, data):
+    """Run genotyping on a prepped, merged VCF file.
+    """
+    out_file = "%s-wgts%s" % utils.splitext_plus(in_file)
+    if not utils.file_exists(out_file):
+        with file_transaction(data, out_file) as tx_out_file:
+            cores = dd.get_cores(data)
+            ref_file = dd.get_ref_file(data)
+            coord_str = bamprep.region_to_gatk(coords)
+            cmd = ("WHAM-GRAPHENING -b {in_file} -x {cores} -a {ref_file} -f {all_bams} -r {coord_str} "
+                   "> {tx_out_file}")
+            do.run(cmd.format(**locals()), "Genotype WHAM: %s" % region.to_safestr(coords))
     return out_file
 
-def _subset_to_sample(bed_file, data):
-    """Convert the global BED file into sample specific calls.
+def _run_wham_merge(in_file, data):
+    """Run WHAM merge functionality to combine closely spaced events.
     """
-    name = dd.get_sample_name(data)
-    base, ext = os.path.splitext(bed_file)
-    out_file = "%s-%s%s" % (base, name, ext)
-    if not utils.file_uptodate(out_file, bed_file):
+    out_file = "%s-merge%s" % utils.splitext_plus(in_file)
+    if not utils.file_exists(out_file):
         with file_transaction(data, out_file) as tx_out_file:
-            with open(bed_file) as in_handle:
-                with open(tx_out_file, "w") as out_handle:
-                    for line in in_handle:
-                        sample_line = _check_bed_call(line, name)
-                        if sample_line:
-                            out_handle.write(sample_line)
-    if utils.file_exists(out_file):
-        bedprep_dir = utils.safe_makedir(os.path.join(os.path.dirname(out_file), "bedprep"))
-        return bedutils.clean_file(out_file, data, bedprep_dir=bedprep_dir)
-    else:
-        return out_file
+            cmd = "mergeIndvs -f {in_file} > {tx_out_file}"
+            do.run(cmd.format(**locals()), "Merge WHAM output")
+    return out_file
 
-def _check_bed_call(line, name):
-    """Check if a BED file line is called
+def filter_by_background(in_vcf, full_vcf, background, data):
+    """Filter SV calls also present in background samples.
+
+    Skips filtering of inversions, which are not characterized differently
+    between cases and controls in test datasets.
     """
-    chrom, start, end, stype_str, samples = line.split("\t")[:5]
-    samples = set(samples.strip().split(";"))
-    start, end = int(start), int(end)
-    if name in samples:
-        if end < start:
-            fstart, fend = end, start
-        else:
-            fstart, fend = start, end
-        if fend - fstart < ensemble.MAX_SVSIZE:
-            return "%s\t%s\t%s\t%s\n" % (chrom, fstart, fend, stype_str)
-
-def _remap_wc(wc):
-    remap = {"copy_number_loss": "DEL",
-             "indel": "DUP",
-             "inversion": "INV",
-             "mobile_element_insertion": "INR"}
-    return remap.get(wc, wc)
-
-def _convert_to_bed(vcf_file, inputs, use_lrt=False):
-    """Convert WHAM output file into BED format for ensemble calling.
-
-    Only outputs passing variants that have break end support and
-    are above the mean of the likelihood ratio test
-    score, if use_lrt is True.
-    """
-    buffer_size = 25  # bp around break ends
-    out_file = "%s.bed" % utils.splitext_plus(vcf_file)[0]
-    if not utils.file_uptodate(out_file, vcf_file):
-        lrt_thresh = _calc_lrt_thresh(vcf_file) if use_lrt else 0.0
-        with file_transaction(inputs[0], out_file) as tx_out_file:
+    Filter = collections.namedtuple('Filter', ['id', 'desc'])
+    back_filter = Filter(id='InBackground',
+                         desc='Rejected due to presence in background sample')
+    out_file = "%s-filter.vcf" % utils.splitext_plus(in_vcf)[0]
+    if not utils.file_uptodate(out_file, in_vcf) and not utils.file_uptodate(out_file + ".vcf.gz", in_vcf):
+        with file_transaction(data, out_file) as tx_out_file:
             with open(tx_out_file, "w") as out_handle:
-                writer = csv.writer(out_handle, dialect="excel-tab")
-                for rec, start, end, call_type in _wham_pass_iter(vcf_file):
-                    start = max(start - buffer_size, 0)
-                    end = int(end) + buffer_size
-                    samples = [g.sample for g in rec.samples if g.gt_type > 0]
-                    if not use_lrt or rec.INFO.get("LRT", 0.0) > lrt_thresh:
-                        writer.writerow([rec.CHROM, start, end, "%s_wham" % call_type,
-                                         ";".join(samples)])
-    return out_file
-
-def _calc_lrt_thresh(vcf_file):
-    """Calculate threshold to use for including samples based on likelihood ratio test.
-
-    For tumor/normal or case/control samples, this provides a threshold to include
-    samples with higher likelihood in the cases. Calculates a simple mean
-    threshold to use for inclusion.
-    """
-    lrts = [call[0].INFO.get("LRT") for call in _wham_pass_iter(vcf_file)]
-    lrts = [x for x in lrts if x is not None]
-    return np.mean(lrts)
-
-def _wham_pass_iter(vcf_file):
-    """Iterator over WHAM records that have breakend support and a called genotype.
-    """
-    reader = vcf.Reader(filename=vcf_file)
-    for rec in reader:
-        samples = [g.sample for g in rec.samples if g.gt_type > 0]
-        if len(samples) > 0:
-            other_chrom = rec.INFO.get("CHR2")
-            if isinstance(other_chrom, (list, tuple)):
-                other_chrom = other_chrom[0]
-            end = rec.INFO.get("END")
-            if other_chrom not in [".", None] and other_chrom == rec.CHROM and end not in [".", None]:
-                end = int(end)
-                if rec.start <= end:
-                    start = rec.start
-                else:
-                    start = end
-                    end = rec.start
-                yield rec, start, end, _remap_wc(rec.INFO["WC"])
-            else:
-                end = rec.start + max([len(x) for x in rec.ALT])
-                yield rec, rec.start, end, "BND"
-
-def _add_wham_classification(in_file, items):
-    """Run WHAM classifier to assign a structural variant type to each call.
-    """
-    wham_sharedir = os.path.normpath(os.path.join(os.path.dirname(subprocess.check_output(["which", "WHAM-BAM"])),
-                                                  os.pardir, "share", "wham"))
-    minclassfreq = 0.4  # Need at least this much support to classify a variant, otherwise unknown
-    out_file = "%s-class%s" % utils.splitext_plus(in_file)
-    training_data = os.path.join(wham_sharedir, "WHAM_training_data.txt")
-    training_data = _prep_training_data(training_data, out_file, items[0])
-    if not utils.file_exists(out_file):
-        if vcfutils.vcf_has_variants(in_file):
-            with file_transaction(items[0], out_file) as tx_out_file:
-                this_python = sys.executable
-                cores = dd.get_cores(items[0])
-                cmd = ("{this_python} {wham_sharedir}/classify_WHAM_vcf.py --proc {cores} "
-                       "--minclassfreq {minclassfreq} {in_file} {training_data} > {tx_out_file}")
-                do.run(cmd.format(**locals()), "Classify WHAM calls")
-        else:
-            utils.symlink_plus(in_file, out_file)
-    return out_file
-
-def _prep_training_data(orig_train, base_file, data):
-    """Prepare training data, removing training data that cause misclassification.
-
-    Insertions dominate classification on test sets, so this cleans them out of
-    the training data set.
-    """
-    to_remove = set(["INR"])
-    out_file = "%s-training.txt" % utils.splitext_plus(base_file)[0]
-    if not utils.file_exists(out_file):
-        with file_transaction(data, out_file) as tx_out_file:
-            with open(orig_train) as in_handle:
-                with open(out_file, "w") as out_handle:
-                    for line in in_handle:
-                        if line.rstrip().split("\t")[-1] not in to_remove:
-                            out_handle.write(line)
-    return out_file
-
-def _fix_vcf(orig_file, items, background_names):
-    """Convert sample names and limit to larger structural calls.
-    """
-    out_file = "%s-clean%s" % utils.splitext_plus(orig_file)
-    if not utils.file_exists(out_file):
-        with file_transaction(items[0], out_file) as tx_out_file:
-            reader = vcf.Reader(filename=orig_file)
-            samples = [dd.get_sample_name(x) for x in items] + background_names
-            assert len(samples) == len(reader.samples)
-            reader.samples = samples
-            writer = vcf.Writer(open(tx_out_file, "w"), template=reader)
-            for rec in reader:
-                if _is_sv(rec):
-                    writer.write_record(rec)
-    return out_file
-
-def _is_sv(rec):
-    """Pass along longer indels and structural variants.
-    """
-    size = max([len(x) for x in [rec.REF] + rec.ALT])
-    is_sv = rec.is_sv or any(x for x in rec.ALT if str(x).startswith("<"))
-    return size > 10 or is_sv
+                reader = vcf.VCFReader(filename=in_vcf)
+                reader.filters["InBackground"] = back_filter
+                full_reader = vcf.VCFReader(filename=full_vcf)
+                writer = vcf.VCFWriter(out_handle, template=reader)
+                for out_rec, rec in zip(reader, full_reader):
+                    rec_type = rec.genotype(dd.get_sample_name(data)).gt_type
+                    if rec_type == 0 or any(rec_type == rec.genotype(dd.get_sample_name(x)).gt_type
+                                            for x in background):
+                        out_rec.add_filter("InBackground")
+                    writer.write_record(out_rec)
+    return vcfutils.bgzip_and_index(out_file, data["config"])

@@ -5,8 +5,9 @@ This automates the steps required for installation and setup to make it
 easier to get started with bcbio-nextgen. The defaults provide data files
 for human variant calling.
 
-Requires: git, Python 2.7 or argparse for earlier versions.
+Requires: git, Python 3.x, Python 2.7 or argparse + Python 2.6 and earlier
 """
+from __future__ import print_function
 import collections
 import contextlib
 import datetime
@@ -15,7 +16,10 @@ import platform
 import shutil
 import subprocess
 import sys
-import urllib2
+try:
+    import urllib2 as urllib_request
+except ImportError:
+    import urllib.request as urllib_request
 
 remotes = {"requirements":
            "https://raw.github.com/chapmanb/bcbio-nextgen/master/requirements.txt",
@@ -26,6 +30,7 @@ remotes = {"requirements":
            "http://repo.continuum.io/miniconda/Miniconda-3.5.5-%s-x86_64.sh"}
 
 def main(args, sys_argv):
+    check_arguments(args)
     check_dependencies()
     with bcbio_tmpdir():
         setup_data_dir(args)
@@ -55,7 +60,7 @@ def _clean_args(sys_argv, args, bcbio):
     # in bcbio_nextgen 0.7.5 and beyond
     process = subprocess.Popen([bcbio["bcbio_nextgen.py"], "--version"], stdout=subprocess.PIPE)
     version, _ = process.communicate()
-    if version.strip() > "0.7.4":
+    if version.decode("utf-8").strip() > "0.7.4":
         if "--nodata" in base:
             base.remove("--nodata")
         else:
@@ -90,14 +95,14 @@ def bootstrap_bcbionextgen(anaconda, args, remotes):
     return out
 
 def install_conda_pkgs(anaconda):
-    pkgs = ["biopython", "boto", "cnvkit", "cpat", "cython", "ipython", "joblib", "lxml",
+    pkgs = ["azure", "biopython", "boto", "cnvkit", "cpat", "cython", "cyvcf2", "gffutils",
+            "ipyparallel", "ipython-cluster-helper", "joblib", "lxml",
             "matplotlib", "msgpack-python", "nose", "numpy", "openssl", "pandas", "patsy", "pycrypto",
             "pip", "progressbar", "python-dateutil", "pybedtools", "pysam", "pyvcf", "pyyaml",
             "pyzmq", "reportlab", "requests", "scikit-learn", "scipy", "seaborn", "setuptools",
-            "sqlalchemy", "statsmodels", "toolz", "tornado"]
-    channels = ["-c", "https://conda.binstar.org/bcbio"]
-    subprocess.check_call([anaconda["conda"], "install", "--yes", "numpy"])
-    subprocess.check_call([anaconda["conda"], "install", "--yes"] + channels + pkgs)
+            "sqlalchemy", "statsmodels", "toolz", "tornado", "seqcluster_lite"]
+    channels = ["-c", "bcbio", "-c", "bioconda"]
+    subprocess.check_call([anaconda["conda"], "install", "--quiet", "--yes"] + channels + pkgs)
 
 def _guess_distribution():
     """Simple approach to identify if we are on a MacOSX or Linux system for Anaconda.
@@ -150,11 +155,11 @@ def write_system_config(base_url, datadir, tooldir):
     if tooldir:
         java_basedir = os.path.join(tooldir, "share", "java")
     rewrite_ignore = ("log",)
-    with contextlib.closing(urllib2.urlopen(base_url)) as in_handle:
+    with contextlib.closing(urllib_request.urlopen(base_url)) as in_handle:
         with open(out_file, "w") as out_handle:
             in_resources = False
             in_prog = None
-            for line in in_handle:
+            for line in (l.decode("utf-8") for l in in_handle):
                 if line[0] != " ":
                     in_resources = line.startswith("resources")
                     in_prog = None
@@ -193,14 +198,23 @@ def bcbio_tmpdir():
     os.chdir(orig_dir)
     shutil.rmtree(work_dir)
 
+def check_arguments(args):
+    """Ensure argruments are consistent and correct.
+    """
+    if args.toolplus and not args.tooldir:
+        raise argparse.ArgumentTypeError("Cannot specify --toolplus without --tooldir")
+
 def check_dependencies():
     """Ensure required tools for installation are present.
     """
     print("Checking required dependencies")
-    try:
-        subprocess.check_call(["git", "--version"])
-    except OSError:
-        raise OSError("bcbio-nextgen installer requires Git (http://git-scm.com/)")
+    for dep, msg in [(["git", "--version"], "Git (http://git-scm.com/)"),
+                     (["wget", "--version"], "wget"),
+                     (["bzip2", "-h"], "bzip2")]:
+        try:
+            subprocess.check_call(dep, stderr=subprocess.STDOUT)
+        except OSError:
+            raise OSError("bcbio-nextgen installer requires %s" % msg)
 
 def _check_toolplus(x):
     """Parse options for adding non-standard/commercial tools like GATK and MuTecT.
@@ -238,12 +252,12 @@ if __name__ == "__main__":
                         action="append", default=[], type=_check_toolplus)
     parser.add_argument("--genomes", help="Genomes to download",
                         action="append", default=[],
-                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn5",
-                                 "canFam3", "dm3", "Zv9", "phix", "sacCer3",
-                                 "xenTro3", "TAIR10", "WBcel235", "pseudomonas_aeruginosa_ucbpp_pa14"])
+                        choices=["GRCh37", "hg19", "hg38", "hg38-noalt", "mm10", "mm9", "rn6", "rn5",
+                                 "canFam3", "dm3", "galGal4", "phix", "pseudomonas_aeruginosa_ucbpp_pa14",
+                                 "sacCer3", "TAIR10", "WBcel235", "xenTro3", "Zv9", "GRCz10"])
     parser.add_argument("--aligners", help="Aligner indexes to download",
                         action="append", default=[],
-                        choices=["bowtie", "bowtie2", "bwa", "novoalign", "snap", "star", "ucsc"])
+                        choices=["bowtie", "bowtie2", "bwa", "novoalign", "rtg", "snap", "star", "ucsc"])
     parser.add_argument("--nodata", help="Do not install data dependencies",
                         dest="install_data", action="store_false", default=True)
     parser.add_argument("--sudo", help="Use sudo for the installation, enabling install of system packages",
