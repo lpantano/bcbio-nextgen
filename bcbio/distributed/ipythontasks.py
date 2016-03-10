@@ -238,6 +238,12 @@ def qsignature_summary(*args):
         return ipython.zip_args(apply(qcsummary.qsignature_summary, *args))
 
 @require(qcsummary)
+def multiqc_summary(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(qcsummary.multiqc_summary, *args))
+
+@require(qcsummary)
 def qc_report_summary(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:

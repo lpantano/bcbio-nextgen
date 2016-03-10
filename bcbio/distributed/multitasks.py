@@ -133,6 +133,10 @@ def qsignature_summary(*args):
     return qcsummary.qsignature_summary(*args)
 
 @utils.map_wrap
+def multiqc_summary(*args):
+    return qcsummary.multiqc_summary(*args)
+
+@utils.map_wrap
 def qc_report_summary(*args):
     return qcsummary.report_summary(*args)
 
