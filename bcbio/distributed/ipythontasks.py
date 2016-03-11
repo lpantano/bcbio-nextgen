@@ -16,6 +16,8 @@ from bcbio import rnaseq
 from bcbio.srna import sample as srna
 from bcbio.srna import group as seqcluster
 from bcbio.chipseq import peaks
+from bcbio.wgbsseq import trimming as wgbs_prepare
+from bcbio.wgbsseq import cpg_caller
 from bcbio.pipeline import (archive, config_utils, disambiguate, sample,
                             qcsummary, shared, variation, run_info, rnaseq)
 from bcbio.provenance import system
@@ -85,6 +87,12 @@ def trim_srna_sample(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(srna.trim_srna_sample, *args))
 
+@require(wgbs_prepare)
+def trim_bs_sample(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(wgbs_prepare.trimming, *args))
+
 @require(srna)
 def srna_annotation(*args):
     args = ipython.unzip_args(args)
@@ -104,16 +112,22 @@ def seqcluster_cluster(*args):
         return ipython.zip_args(apply(seqcluster.run_cluster, *args))
 
 @require(seqcluster)
-def srna_alignment(* args):
+def srna_alignment(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
-        return ipython.zip_args(apply(seqcluster.run_align, *args))
+        return python.zip_args(apply(seqcluster.run_align, *args))
 
 @require(peaks)
-def peakcalling(* args):
+def peakcalling(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(peaks.calling, *args))
+
+@require(cpg_caller)
+def cpgcalling(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(cpg_caller.calling, *args))
 
 @require(sailfish)
 def run_sailfish(*args):
@@ -217,6 +231,7 @@ def coverage_report(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(qcsummary.coverage_report, *args))
 
+@require(qcsummary)
 def qsignature_summary(*args):
     args = ipython.unzip_args(args)
     with _setup_logging(args) as config:
