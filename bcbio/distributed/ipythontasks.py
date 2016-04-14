@@ -129,6 +129,12 @@ def cpgcalling(*args):
     with _setup_logging(args) as config:
         return ipython.zip_args(apply(cpg_caller.calling, *args))
 
+@require(cpg_caller)
+def cpg_processing(*args):
+    args = ipython.unzip_args(args)
+    with _setup_logging(args) as config:
+        return ipython.zip_args(apply(cpg_caller.cpg_processing, *args))
+
 @require(sailfish)
 def run_sailfish(*args):
     args = ipython.unzip_args(args)

@@ -89,6 +89,10 @@ def cpgcalling(*args):
     return cpg_caller.calling(*args)
 
 @utils.map_wrap
+def cpg_processing(*args):
+    return cpg_caller.cpg_postprocessing(*args)
+
+@utils.map_wrap
 def prep_align_inputs(*args):
     return alignprep.create_inputs(*args)
 

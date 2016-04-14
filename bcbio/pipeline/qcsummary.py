@@ -66,8 +66,8 @@ def pipeline_summary(data):
     if data["analysis"].lower().startswith("smallrna-seq"):
         work_bam = data["clean_fastq"]
         data["summary"] = _run_qc_tools(work_bam, data)
-    elif data["analysis"].lower().startswith("chip-seq"):
-        work_bam = data["raw_bam"]
+    elif data["analysis"].lower().startswith("wgbs-seq"):
+        work_bam = data["files"]
         data["summary"] = _run_qc_tools(work_bam, data)
     elif dd.get_ref_file(data) is not None and work_bam and work_bam.endswith(".bam"):
         logger.info("Generating summary files: %s" % dd.get_sample_name(data))
@@ -109,7 +109,10 @@ def _run_qc_tools(bam_file, data):
     metrics = {}
     to_run = []
     if "fastqc" not in tz.get_in(("config", "algorithm", "tools_off"), data, []):
-        to_run.append(("fastqc", _run_fastqc))
+        if data["analysis"].lower().startswith("wgbs-seq"):
+            to_run.append(("cegx", _run_cegx))
+        else:
+            to_run.append(("fastqc", _run_fastqc))
     if data["analysis"].lower().startswith("rna-seq"):
         to_run += [("samtools", _run_samtools_stats)]
         if gtf.is_qualimap_compatible(dd.get_gtf_file(data)):
@@ -412,7 +415,7 @@ def _summarize_kraken(fn):
     kraken = {"kraken_sp": list_sp, "kraken_value": list_value}
     return kraken
 
-def _run_fastqc(bam_file, data, fastqc_out):
+def _run_fastqc(bam_file, data, fastqc_out, rename=True):
     """Run fastqc, generating report in specified directory and parsing metrics.
 
     Downsamples to 10 million reads to avoid excessive processing times with large
@@ -426,7 +429,7 @@ def _run_fastqc(bam_file, data, fastqc_out):
         work_dir = os.path.dirname(fastqc_out)
         utils.safe_makedir(work_dir)
         ds_bam = (bam.downsample(bam_file, data, 1e7)
-                  if data.get("analysis", "").lower() not in ["standard", "smallrna-seq"]
+                  if data.get("analysis", "").lower() not in ["standard", "smallrna-seq", "wgbs-seq"]
                   else None)
         bam_file = ds_bam if ds_bam else bam_file
         frmt = "bam" if bam_file.endswith("bam") else "fastq"
@@ -444,11 +447,12 @@ def _run_fastqc(bam_file, data, fastqc_out):
                 if not os.path.exists(sentry_file) and os.path.exists(tx_combo_file):
                     utils.safe_makedir(fastqc_out)
                     # Use sample name for reports instead of bam file name
-                    with open(os.path.join(tx_fastqc_out, "fastqc_data.txt"), 'r') as fastqc_bam_name, \
-                            open(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), 'w') as fastqc_sample_name:
-                        for line in fastqc_bam_name:
-                            fastqc_sample_name.write(line.replace(os.path.basename(bam_file), fastqc_clean_name))
-                    shutil.move(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), os.path.join(fastqc_out, 'fastqc_data.txt'))
+                    if rename:
+                        with open(os.path.join(tx_fastqc_out, "fastqc_data.txt"), 'r') as fastqc_bam_name, \
+                                open(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), 'w') as fastqc_sample_name:
+                            for line in fastqc_bam_name:
+                                fastqc_sample_name.write(line.replace(os.path.basename(bam_file), fastqc_clean_name))
+                        shutil.move(os.path.join(tx_fastqc_out, "_fastqc_data.txt"), os.path.join(fastqc_out, 'fastqc_data.txt'))
                     shutil.move(tx_combo_file, sentry_file)
                     if os.path.exists("%s.zip" % tx_fastqc_out):
                         shutil.move("%s.zip" % tx_fastqc_out, os.path.join(fastqc_out, "%s.zip" % fastqc_clean_name))
@@ -461,7 +465,26 @@ def _run_fastqc(bam_file, data, fastqc_out):
     parser.save_sections_into_file()
     return stats
 
+def _run_cegx(bam_file, data, fastqc_out, rename=True):
+    """Run cegx, generating report in specified directory and parsing metrics.
+    """
+    sentry_file = os.path.join(fastqc_out, "cegx_report.html")
+    if not os.path.exists(sentry_file):
+        work_dir = os.path.dirname(fastqc_out)
+        utils.safe_makedir(work_dir)
+        fastqc_name = utils.splitext_plus(os.path.basename(bam_file))[0]
+        num_cores = data["config"]["algorithm"].get("num_cores", 1)
+        with tx_tmpdir(data, work_dir) as tx_tmp_dir:
+            with utils.chdir(tx_tmp_dir):
+                cl = [config_utils.get_program("cegx", data["config"]),
+                      "-d", tx_tmp_dir,
+                      "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, bam_file]
+                do.run(cl, "cegx: %s" % dd.get_sample_name(data))
+                shutil.move(tx_tmpdir, fastqc_out)
+    return {}
+
 # ## Qualimap
+
 
 def _parse_num_pct(k, v):
     num, pct = v.split(" / ")
@@ -592,10 +615,8 @@ def _parse_metrics(metrics):
     to_change = dict({"5'-3' bias": 1, "Intergenic pct": "Intergenic Rate",
                       "Intronic pct": "Intronic Rate",
                       "Exonic pct": "Exonic Rate",
-                      "Not aligned": 0, 'Aligned to genes': 0,
-                      'Non-unique alignment': 0, "No feature assigned": 0,
-                      "Duplication Rate of Mapped": 1, "Fragment Length Mean": 1,
-                      "Ambiguou alignment": 0})
+                      "Duplication Rate of Mapped": 1
+                      })
     total = ["Not aligned", "Aligned to genes", "No feature assigned"]
 
     out = {}

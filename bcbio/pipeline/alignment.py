@@ -10,7 +10,7 @@ import toolz as tz
 from bcbio import bam, utils
 from bcbio.bam import cram
 from bcbio.ngsalign import (bowtie, bwa, tophat, bowtie2, novoalign, snap, star,
-                            hisat2)
+                            hisat2, bismark, bsmap)
 
 # Define a next-generation sequencing tool to plugin:
 # align_fn -- runs an aligner and generates SAM output
@@ -32,6 +32,8 @@ TOOLS = {
     "bowtie2": NgsTool(bowtie2.align, None,
                        bowtie2.galaxy_location_file, bowtie2.remap_index_fn),
     "bwa": NgsTool(bwa.align_pipe, bwa.align_bam, bwa.galaxy_location_file, None),
+    "bismark": NgsTool(bismark.align, None, None, bismark.remap_index_fn),
+    "bsmap": NgsTool(bsmap.align, None, None, None),
     "novoalign": NgsTool(novoalign.align_pipe, novoalign.align_bam,
                          novoalign.galaxy_location_file, novoalign.remap_index_fn),
     "tophat": NgsTool(tophat.align, None,

@@ -223,4 +223,7 @@ def calculate(parallel, items, sysinfo, config, multiplier=1,
     parallel["mem"] = str(memory_per_job)
     parallel["mem_pct"] = "%.2f" % mem_pct
     parallel["system_cores"] = sysinfo.get("cores", 1)
+    # if "ensure_mem" in parallel:
+    #    if "caller" in parallel['ensure_mem']:
+    #        raise ValueError(parallel)
     return parallel

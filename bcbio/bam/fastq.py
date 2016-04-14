@@ -167,6 +167,23 @@ def is_fastq(in_file, bzip=True):
     else:
         return False
 
+def downsample_seqtk(in_files, data, N):
+    """ get N random headers from a fastq file without reading the
+    """
+    in_files = [in_files[0]] if not in_files[1] else in_files
+    out_files = utils.append_stem(in_files, "_subset")
+
+    if utils.file_exists(out_files[0]):
+        return out_files
+
+    seqtk = config_utils.get_program("seqtk", data["config"])
+    cmd = "{seqtk} sample -2 -s42 {in_file} {N} | gzip > {tx_out}"
+    with file_transaction(out_files) as tx_out_files:
+        for in_file, tx_out in zip(in_files, tx_out_files):
+            do.run(cmd.format(**locals()), "Run sampling for %s" % in_file)
+    out_files = out_files.append(None) if len(out_files) == 1 else out_files
+    return out_files
+
 def downsample(f1, f2, data, N, quick=False):
     """ get N random headers from a fastq file without reading the
     whole thing into memory
@@ -183,8 +200,8 @@ def downsample(f1, f2, data, N, quick=False):
 
     fh1 = open_possible_gzip(f1)
     fh2 = open_possible_gzip(f2) if f2 else None
-    outf1 = os.path.splitext(f1)[0] + ".subset" + os.path.splitext(f1)[1]
-    outf2 = os.path.splitext(f2)[0] + ".subset" + os.path.splitext(f2)[1] if f2 else None
+    outf1 = utils.append_stem(f1, "_subset")
+    outf2 = utils.append_stem(f2, "_subset") if f2 else None
 
     if utils.file_exists(outf1):
         if not outf2:
