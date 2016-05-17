@@ -365,6 +365,7 @@ def wgbsseqpipeline(config, run_info_yaml, parallel, dirs, samples):
                     multiplier=alignprep.parallel_multiplier(samples)) as run_parallel:
         with profile.report("alignment", dirs):
             samples = run_parallel("process_alignment", samples)
+
     with prun.start(_wres(parallel, ["caller"], ensure_mem={"caller": 5}),
                     samples, config, dirs, "multicore2",
                     multiplier=24) as run_parallel:
@@ -372,6 +373,11 @@ def wgbsseqpipeline(config, run_info_yaml, parallel, dirs, samples):
         with profile.report("cpg calling", dirs):
             import bcbio.wgbsseq.cpg_caller as cpg_caller
             cpg_caller.parallel_calling(samples, run_parallel)
+
+    with prun.start(_wres(parallel, ["picard", "fastqc", "samtools"]),
+                    samples, config, dirs, "qc") as run_parallel:
+        with profile.report("quality control", dirs):
+            samples = qcsummary.generate_parallel(samples, run_parallel)
     return samples
 
 def rnaseq_prep_samples(config, run_info_yaml, parallel, dirs, samples):

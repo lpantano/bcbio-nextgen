@@ -67,7 +67,6 @@ def pipeline_summary(data):
         work_bam = data["clean_fastq"]
         data["summary"] = _run_qc_tools(work_bam, data)
     elif data["analysis"].lower().startswith("wgbs-seq"):
-        work_bam = data["files"]
         data["summary"] = _run_qc_tools(work_bam, data)
     elif dd.get_ref_file(data) is not None and work_bam and work_bam.endswith(".bam"):
         logger.info("Generating summary files: %s" % dd.get_sample_name(data))
@@ -120,6 +119,8 @@ def _run_qc_tools(bam_file, data):
     elif data["analysis"].lower().startswith("chip-seq"):
         bam_file = bam_file.replace(".unique", "")
         to_run += [("samtools", _run_samtools_stats)]
+    elif data["analysis"].lower().startswith("wgbs-seq"):
+        to_run.append(("qualimap", _run_qualimap))
     elif not data["analysis"].lower().startswith("smallrna-seq"):
         to_run += [("samtools", _run_samtools_stats), ("gemini", _run_gemini_stats)]
     if data["analysis"].lower().startswith(("standard", "variant2")):
@@ -468,7 +469,8 @@ def _run_fastqc(bam_file, data, fastqc_out, rename=True):
 def _run_cegx(bam_file, data, fastqc_out, rename=True):
     """Run cegx, generating report in specified directory and parsing metrics.
     """
-    sentry_file = os.path.join(fastqc_out, "cegx_report.html")
+    sentry_file = os.path.join(fastqc_out, "%s_1_fastqc.html" % dd.get_sample_name(data))
+    bam_file = dd.get_input_sequence_files(data)[0]
     if not os.path.exists(sentry_file):
         work_dir = os.path.dirname(fastqc_out)
         utils.safe_makedir(work_dir)
@@ -476,11 +478,11 @@ def _run_cegx(bam_file, data, fastqc_out, rename=True):
         num_cores = data["config"]["algorithm"].get("num_cores", 1)
         with tx_tmpdir(data, work_dir) as tx_tmp_dir:
             with utils.chdir(tx_tmp_dir):
-                cl = [config_utils.get_program("cegx", data["config"]),
+                cl = [config_utils.get_program("cegxqc", data["config"]),
                       "-d", tx_tmp_dir,
                       "-t", str(num_cores), "--extract", "-o", tx_tmp_dir, bam_file]
                 do.run(cl, "cegx: %s" % dd.get_sample_name(data))
-                shutil.move(tx_tmpdir, fastqc_out)
+                shutil.move(tx_tmp_dir, fastqc_out)
     return {}
 
 # ## Qualimap

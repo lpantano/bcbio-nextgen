@@ -11,8 +11,9 @@ import pandas as pd
 import math
 
 import pysam
+import scipy.stats as stats
 
-from bcbio.utils import splitext_plus, file_exists, safe_makedir, chdir
+from bcbio.utils import splitext_plus, file_exists, safe_makedir, chdir, append_stem
 from bcbio.log import logger
 from bcbio.provenance import do
 from bcbio.distributed.transaction import file_transaction, tx_tmpdir
@@ -69,7 +70,7 @@ def _bsmap_calling(data):
     work_bam = dd.get_work_bam(data)
     python = os.path.join(os.path.dirname(sys.executable), "python")
     methratio = config_utils.get_program("methratio.py", config)
-    cmd = ("{python} {methratio} -n -u -p -r -m 2 --chr={chrom} --ref={ref} {work_bam} >> {out_tx}")
+    cmd = ("{python} {methratio} -g -n -u -p -r -m 5 --chr={chrom} --ref={ref} {work_bam} >> {out_tx}")
     chrom = data["chr_to_run"]
 
     out_file = os.path.join(workdir, "methyratios_%s.txt" % chrom)
@@ -109,77 +110,148 @@ def parallel_calling(data, run_parallel):
                     if sample[0]["chr_to_run"] == sample2[0]["chr_to_run"]:
                         sample[0]["control"] = sample2[0]["cpg_file"]
                         break
-    run_parallel("cpg_processing", out)
-    # run_parallel("cpg_processing", data)
+    out = run_parallel("cpg_processing", out)
+    for sample in data:
+        sample[0]["cpg_split"] = []
+        sample[0]["hmc_split"] = []
+        name = dd.get_sample_name(sample[0])
+        for chunck in out:
+            if name == dd.get_sample_name(chunck[0]):
+                sample[0]["cpg_split"].append(chunck[0]["cpg_file"])
+                if "hmc_file" in chunck[0]:
+                    sample[0]["hmc_split"].append(chunck[0]["hmc_file"])
+    run_parallel("cpg_stats", data)
     #_make_stats(data)
 
 def _sync_pos(handle, tag):
     for line in handle:
         cols = line.strip().split("\t")
+        info = cols[4:]
         if cols[3] != "CG":
             continue
         pos = int(cols[1])
+        ratio = [int(float(cols[5])), int(cols[6])]
         # print "read another line of 2 file: %s" % line.strip()
         if tag <= pos:
-            return [pos, float(cols[4])]
+            return [handle, {"pos": pos, "counts": ratio, "info": info, "ratio": float(cols[4])}]
     return [None, None]
+
+def _call_hmc(mc, hmc):
+    n1, n2 = mc[0] - mc[1], mc[1]
+    n1 = max(0, n1)
+    m1, m2 = hmc[0] - hmc[1], hmc[1]
+    m1 = max(0, m1)
+    oddsratio, pvalue = stats.fisher_exact([[n1, n2], [m1, m2]])
+    return pvalue
 
 def cpg_postprocessing(data):
     mC = data["cpg_file"]
     if not "control" in data:
         return [[data]]
     hmC = data["control"]
+    out_file = append_stem(mC, "_hmC")
+    pos = 0
     pos_hmC = 0
-    pos_mC = 0
-    counts = 0
-    hmC_counts = 0
-    with open(mC) as mC_h:
-        with open(hmC) as hmC_h:
-            for line in mC_h:
-                cols = line.strip().split("\t")
-                if cols[3] != "CG":
-                    continue
-                # print "read line of 1 file %s" % line.strip()
-                pos = int(cols[1])
-                ratio = float(cols[4])
-                if pos < pos_hmC:
-                    continue
-                elif pos > pos_hmC:
-                    pos_hmC, ratio_hmC = _sync_pos(hmC_h, pos)
-                if not pos_hmC:
-                    break
-                if pos == pos_hmC:
-                    counts += 1
-                    if ratio > 0.2 and ratio_hmC < 0.2:
-                        hmC_counts += 1
-                        # print "It is a hmC site %s ratio in hmC %s " % (line.strip(), ratio_hmC)
-                    elif ratio > 0.2 and ratio_hmC > 0.2:
-                        continue
-                        # print "It is a mC site %s ratio in hmC %s " % (line.strip(), ratio_hmC)
-    print "%s %s counts %s over %s" % (mC_h, hmC_h, hmC_counts, counts)
+    data["hmc_file"] = out_file
+    if file_exists(out_file):
+        return [[data]]
+    logger.debug("processing %s versus %s" % (mC, hmC))
+    with file_transaction(out_file) as out_tx:
+        with open(out_tx, "w") as out_handle:
+            with open(mC) as mC_h:
+                with open(hmC) as hmC_h:
+                    for line in mC_h:
+                        cols = line.strip().split("\t")
+                        if cols[3] != "CG":
+                            continue
+                        pos = int(cols[1])
+                        ratio = float(cols[4])
+                        counts = [int(float(cols[5])), int(cols[6])]
+                        if pos < pos_hmC:
+                            continue
+                        elif pos > pos_hmC:
+                            hmC_h, hmC = _sync_pos(hmC_h, pos)
+                            if hmC_h == None:
+                                break
+                            pos_hmC = hmC["pos"]
+                        if counts[0] < 9 or hmC["counts"][0] < 9:
+                            continue
+                        if pos == hmC["pos"]:
+                            pvalue = _call_hmc(counts, hmC["counts"])
+                            print >>out_handle, "%s\t%s\t%s" % (line.strip(), "\t".join(hmC["info"]), pvalue)
+    return [[data]]
 
-def make_stats(sample):
+def hmc_stats(sample):
+    dt = Counter()
+    work_dir = dd.get_work_dir(sample)
+    sample_name = dd.get_sample_name(sample)
+    out = os.path.join(work_dir, "cpg_split", sample_name, "%s_hmC.tsv" % sample_name)
+    cmd = "cat %s > {out}" % " ".join(sample["hmc_split"])
+    do.run(cmd.format(**locals()), "")
+
+def cpg_stats(sample):
     dtdepth = Counter()
     dtratio = Counter()
     work_dir = dd.get_work_dir(sample)
     sample_name = dd.get_sample_name(sample)
     depth_out = os.path.join(work_dir, "cpg_split", sample_name, "depth.tsv")
     ratio_out = os.path.join(work_dir, "cpg_split", sample_name, "ratio.tsv")
+    hmc_out = os.path.join(work_dir, "cpg_split", sample_name, "%s_hmc.tsv.gz" % sample_name)
+    hmc_files = " ".join(sample["hmc_split"])
+    with file_transaction(hmc_out) as tx_out:
+        header = " ".join(["chr", "pos", "strand", "context", "ratio", "eff_CT_counts",
+                           "C_counts", "CT_counts", "rev_G_counts", "rev_GA_counts",
+                           "CI_lover", "CI_upper", "ox_ratio", "ox_eff_CT_counts",
+                           "ox_C_counts", "ox_CT_counts", "ox_rev_G_counts",
+                           "ox_rev_GA_counts", "ox_CI_lower", "ox_CI_upper", "pvalue"])
+        cmd = "cat <(echo {header} | sed 's/ /\t/g') {hmc_files} | gzip -c > {tx_out}"
+        if not file_exists(hmc_out):
+            do.run(cmd.format(**locals()), "Merging %s" % sample_name)
     work_bam = dd.get_work_bam(sample)
-    with closing(pysam.Samfile(work_bam, "rb")) as pysam_work_bam:
-         chroms = pysam_work_bam.references
-         for chrom in chroms:
-             logger.debug("Reading %s of sample %s" % (chrom, sample_name))
-             cpg_file = os.path.join(work_dir, "cpg_split", sample_name, "methyratios_%s.txt" % chrom)
-             if file_exists(cpg_file):
+    if not file_exists(depth_out):
+        for cpg_file in sample["cpg_split"]:
+            logger.debug("Reading %s of sample %s" % (cpg_file, sample_name))
+            if file_exists(cpg_file):
                  with open(cpg_file) as in_handle:
                      for line in in_handle:
                          cols = line.strip().split("\t")
                          if cols[3] == "CG":
                              ratio = int(float(cols[4]) * 100)
                              dtratio[ratio] += 1
-                             depth = int(math.ceil(float(cols[5]))) if float(cols[5]) < 10 else 10
+                             depth = int(math.ceil(float(cols[5]))) if float(cols[5]) < 50 else 50
                              dtdepth[depth] += 1
-         pd.DataFrame(dtdepth, index=[1]).to_csv(depth_out, sep="\t")
-         pd.DataFrame(dtratio, index=[1]).to_csv(ratio_out, sep="\t")
+        pd.DataFrame(dtdepth, index=[1]).to_csv(depth_out, sep="\t")
+        pd.DataFrame(dtratio, index=[1]).to_csv(ratio_out, sep="\t")
+    # calculate mlml
+    if not hmc_files:
+        return None
+    out_dir = safe_makedir(os.path.join(work_dir, "mlml", sample_name))
+    mlml_out = os.path.join(out_dir, "%s_mlml.txt.gz" % sample_name)
+    if not file_exists(mlml_out) and file_exists(hmc_out):
+        with chdir(out_dir):
+            with file_transaction(mlml_out) as tx_out:
+                tx_out_1 = "%s_noheader" % tx_out
+                tx_out_2 = "%s_alone" % tx_out
+                cmd = " ".join(["zcat %s | sed -e '1d' | awk " % hmc_out, ''' '{rounded = sprintf("%d", $14);print $1"\\t"$2"\t"$3"\\tCpG\\t"$13"\\t"rounded}' ''', "> %s_ox.txt" % sample_name])
+                do.run(cmd, "Creating OX input for %s" % sample_name)
+                cmd = " ".join(["zcat %s | sed -e '1d' | awk " % hmc_out, ''' '{rounded = sprintf("%d", $6);print $1"\\t"$2"\\t"$3"\\tCpG\\t"$5"\\t"rounded}' ''', "> %s_bs.txt" % sample_name])
+                do.run(cmd, "Creating BS input for %s" % sample_name)
+                cmd = ("mlml -o {tx_out_1} -u {sample_name}_bs.txt -m {sample_name}_ox.txt -v").format(**locals())
+                do.run(cmd, "Run MLML with %s" % sample_name)
+                cmd = ("cat <(echo chrom start end mC hmC C conflicts | sed 's/ /\t/g') {tx_out_1} | gzip -c > {tx_out_2} ").format(**locals())
+                do.run(cmd, "")
+                tx_out_1 = "%s.woFDR.gz" % tx_out
+                cmd = ("paste <(zcat {hmc_out}) <(zcat {tx_out_2}) | gzip -c > {tx_out}").format(**locals())
+                do.run(cmd, "Merge data for %s" % sample_name)
 
+    merge_out = [os.path.join(out_dir, "%s_merged.txt.gz" % sample_name), os.path.join(out_dir, "%s_merged_pass.txt.gz" % sample_name)]
+    if not file_exists(merge_out[0]):
+        with file_transaction(merge_out) as tx_outs:
+            tx_out, tx_out_pass = tx_outs
+            df = pd.read_csv(mlml_out, sep="\t")
+            import statsmodels.sandbox.stats.multicomp
+            df["fdr"] = statsmodels.sandbox.stats.multicomp.fdrcorrection0(df["pvalue"])[1]
+            df_p_pass = df[df.fdr<0.05]
+            logger.debug("Pass FDR 5 pct in %s:%s " % (sample_name, float(df_p_pass.shape[1])/float(df.shape[1])))
+            df.to_csv(tx_out, sep="\t")
+            df_p_pass.to_csv(tx_out_pass, sep="\t")
