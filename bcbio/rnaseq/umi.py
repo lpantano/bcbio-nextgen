@@ -103,6 +103,20 @@ def get_cellular_barcodes(data):
     else:
         return []
 
+def get_sample_barcodes(fn, out_dir):
+    if not fn:
+        logger.error("Sample demultiplexing needs a list of known indexes provided "
+                     "with via the sample_barcodes option in the algorithm section.")
+        sys.exit(1)
+    # import pdb; pdb.set_trace()
+    utils.safe_makedir(out_dir)
+    out_fn = os.path.join(out_dir, "barcodes.csv")
+    with open(fn) as inh:
+        with open(out_fn, 'w') as outh:
+            for line in inh:
+                outh.write("%s\n" % (line.strip().split(",")[0]))
+    return out_fn
+
 def umi_transform(data):
     """
     transform each read by identifying the barcode and UMI for each read
@@ -328,6 +342,10 @@ def demultiplex_samples(data):
     """
     demultiplex a fastqtransformed FASTQ file into separate sample barcode files
     """
+    work_dir = os.path.join(dd.get_work_dir(data), "umis")
+    sample_dir = os.path.join(work_dir, dd.get_sample_name(data))
+    demulti_dir = os.path.join(sample_dir, "demultiplexed")
+
     files = data["files"]
     if len(files) == 2:
         logger.error("Sample demultiplexing doesn't handle paired-end reads, but "
@@ -340,14 +358,8 @@ def demultiplex_samples(data):
         read = next(in_handle)
         if "SAMPLE_" not in read:
             return [[data]]
-    bcfile = dd.get_sample_barcodes(data)
-    if not bcfile:
-        logger.error("Sample demultiplexing needs a list of known indexes provided "
-                     "with via the sample_barcodes option in the algorithm section.")
-        sys.exit(1)
-    work_dir = os.path.join(dd.get_work_dir(data), "umis")
-    sample_dir = os.path.join(work_dir, dd.get_sample_name(data))
-    demulti_dir = os.path.join(sample_dir, "demultiplexed")
+
+    bcfile = get_sample_barcodes(dd.get_sample_barcodes(data), sample_dir)
     demultiplexed = glob.glob(os.path.join(demulti_dir, "*.fq*"))
     if demultiplexed:
         return [split_demultiplexed_sampledata(data, demultiplexed)]
@@ -357,7 +369,7 @@ def demultiplex_samples(data):
     msg = "Demultiplexing {fq1}."
     with file_transaction(data, demulti_dir) as tx_dir:
         do.run(cmd.format(**locals()), msg.format(**locals()))
-    demultiplexed = glob.glob(os.path.join(demulti_dir, "*.fq*"))
+    demultiplexed = glob.glob(os.path.join(sample_dir, "*.fq*"))
     return [split_demultiplexed_sampledata(data, demultiplexed)]
 
 def split_demultiplexed_sampledata(data, demultiplexed):
