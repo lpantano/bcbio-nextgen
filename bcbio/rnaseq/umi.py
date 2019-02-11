@@ -370,6 +370,7 @@ def demultiplex_samples(data):
     with file_transaction(data, demulti_dir) as tx_dir:
         do.run(cmd.format(**locals()), msg.format(**locals()))
     demultiplexed = glob.glob(os.path.join(sample_dir, "*.fq*"))
+    print(demultiplexed)
     return [split_demultiplexed_sampledata(data, demultiplexed)]
 
 def split_demultiplexed_sampledata(data, demultiplexed):
