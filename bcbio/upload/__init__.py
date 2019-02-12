@@ -761,6 +761,9 @@ def _get_files_project(sample, upload_config):
                             "type": "rownames"})
                 out.append({"path": umi_file + ".colnames",
                             "type": "colnames"})
+            if dd.get_combined_histogram(sample):
+                out.append({"path": dd.get_combined_histogram(sample),
+                            "type": "txt"})
         else:
             out.append({"path": dd.get_combined_counts(sample)})
     if dd.get_annotated_combined_counts(sample):

@@ -248,7 +248,8 @@ def barcode_histogram(data):
             do.run(cmd.format(**locals()), message)
     cutoff = dd.get_minimum_barcode_depth(data)
     filter_barcode_histogram(filtered_out_file, out_file, cutoff)
-    return [[data]]
+    newdata = dd.set_histogram_counts(data, filtered_out_file)
+    return [[newdata]]
 
 def tagcount(data):
     bam = dd.get_transcriptome_bam(data)
@@ -369,8 +370,7 @@ def demultiplex_samples(data):
     msg = "Demultiplexing {fq1}."
     with file_transaction(data, demulti_dir) as tx_dir:
         do.run(cmd.format(**locals()), msg.format(**locals()))
-    demultiplexed = glob.glob(os.path.join(sample_dir, "*.fq*"))
-    print(demultiplexed)
+    demultiplexed = glob.glob(os.path.join(demulti_dir, "*.fq*"))
     return [split_demultiplexed_sampledata(data, demultiplexed)]
 
 def split_demultiplexed_sampledata(data, demultiplexed):
@@ -394,6 +394,7 @@ def split_demultiplexed_sampledata(data, demultiplexed):
 def concatenate_sparse_counts(*samples):
     samples = concatenate_sparse_matrices(samples, deduped=True)
     samples = concatenate_sparse_matrices(samples, deduped=False)
+    samples = concatenate_cb_histograms(samples)
     return samples
 
 def concatenate_sparse_matrices(samples, deduped=True):
@@ -435,6 +436,25 @@ def concatenate_sparse_matrices(samples, deduped=True):
             newsamples.append([dd.set_combined_counts(data, out_file)])
         return newsamples
     return samples
+
+def concatenate_cb_histograms(samples):
+    work_dir = dd.get_in_samples(samples, dd.get_work_dir)
+    umi_dir = os.path.join(work_dir, "umis")
+    out_file = os.path.join(umi_dir, "cb-histogram.txt")
+
+    files = [dd.get_histogram_counts(data) for data in
+            dd.sample_data_iterator(samples)
+            if dd.get_histogram_counts(data)]
+    files = " ".join(files)
+    cmd = "cat {files} > {out_file}"
+    if not file_exists(out_file):
+        with file_transaction(out_file) as tx_out_file:
+            message = "Concay cb histograms."
+            do.run(cmd.format(**locals()), message)
+    newsamples = []
+    for data in dd.sample_data_iterator(samples):
+        newsamples.append([dd.set_combined_histogram(data, out_file)])
+    return newsamples
 
 def version(data):
     umis_cmd = config_utils.get_program("umis", data, default="umis")
