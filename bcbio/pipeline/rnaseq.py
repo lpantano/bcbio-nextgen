@@ -6,7 +6,7 @@ from bcbio.rnaseq import (featureCounts, cufflinks, oncofuse, count, dexseq,
 from bcbio.ngsalign import bowtie2, alignprep
 from bcbio.variation import effects, joint, multi, population, vardict
 import bcbio.pipeline.datadict as dd
-from bcbio.utils import filter_missing, flatten, to_single_data
+from bcbio.utils import filter_missing, flatten, to_single_data, file_exists
 from bcbio.log import logger
 
 
@@ -40,6 +40,34 @@ def singlecell_rnaseq(samples, run_parallel):
         logger.error(("%s is not supported for singlecell RNA-seq "
                       "quantification." % quantifier))
         sys.exit(1)
+    samples = scrnaseq_concatenate_metadata(samples)
+    return samples
+
+def scrnaseq_concatenate_metadata(samples):
+    barcodes = {}
+    counts =  ""
+    metadata = {}
+    for sample in dd.sample_data_iterator(samples):
+        with open(dd.get_sample_barcodes(sample)) as inh:
+            for line in inh:
+                cols = line.strip().split(",")
+                barcodes[cols[0]] = cols[1:]
+
+        counts = dd.get_combined_counts(sample)
+        meta = map(str, list(sample["metadata"].values()))
+        meta_cols = list(sample["metadata"].keys())
+        meta = ["NaN" if not v else v for v in meta]
+        metadata[dd.get_sample_name(sample)] = meta
+
+    metadata_fn = counts + ".metadata"
+    if not file_exists(metadata_fn):
+        with open(metadata_fn, 'w') as outh:
+            outh.write(",".join(["sample"] + meta_cols) + '\n')
+            with open(counts + ".colnames") as inh:
+                for line in inh:
+                    sample = line.split(":")[0]
+                    barcode = sample.split("-")[1]
+                    outh.write(",".join(barcodes[barcode] + metadata[sample]) + '\n')
     return samples
 
 def rnaseq_variant_calling(samples, run_parallel):
