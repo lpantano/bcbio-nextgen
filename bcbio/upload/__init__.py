@@ -766,6 +766,10 @@ def _get_files_project(sample, upload_config):
             if dd.get_combined_histogram(sample):
                 out.append({"path": dd.get_combined_histogram(sample),
                             "type": "txt"})
+            rda = os.path.join(os.path.dirname(count_file), "se.rda")
+            if utils.file_exists(rda):
+                out.append({"path": rda,
+                            "type": "rda"})
         else:
             out.append({"path": dd.get_combined_counts(sample)})
     if dd.get_annotated_combined_counts(sample):

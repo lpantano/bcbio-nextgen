@@ -2,13 +2,12 @@ import os
 import sys
 from bcbio.rnaseq import (featureCounts, cufflinks, oncofuse, count, dexseq,
                           express, variation, stringtie, sailfish, spikein, pizzly, ericscript,
-                          kallisto, salmon)
+                          kallisto, salmon, singlecellexperiment)
 from bcbio.ngsalign import bowtie2, alignprep
 from bcbio.variation import effects, joint, multi, population, vardict
 import bcbio.pipeline.datadict as dd
 from bcbio.utils import filter_missing, flatten, to_single_data, file_exists
 from bcbio.log import logger
-
 
 def fast_rnaseq(samples, run_parallel):
     samples = run_parallel("run_salmon_index", [samples])
@@ -41,9 +40,15 @@ def singlecell_rnaseq(samples, run_parallel):
                       "quantification." % quantifier))
         sys.exit(1)
     samples = scrnaseq_concatenate_metadata(samples)
+    singlecellexperiment.make_scrnaseq_object(samples)
     return samples
 
 def scrnaseq_concatenate_metadata(samples):
+    """
+    Create file same dimension than mtx.colnames
+    with metadata and sample name to help in the
+    creation of the SC object.
+    """
     barcodes = {}
     counts =  ""
     metadata = {}
@@ -51,6 +56,9 @@ def scrnaseq_concatenate_metadata(samples):
         with open(dd.get_sample_barcodes(sample)) as inh:
             for line in inh:
                 cols = line.strip().split(",")
+                if len(cols) == 1:
+                    # Assign sample name in case of missing in barcodes
+                    cols.append("NaN")
                 barcodes[cols[0]] = cols[1:]
 
         counts = dd.get_combined_counts(sample)
@@ -443,4 +451,3 @@ def combine_files(samples):
             data = dd.set_tx2gene(data, tx2gene_file)
         updated_samples.append([data])
     return updated_samples
-

@@ -241,7 +241,7 @@ def get_rRNA(gtf):
     """
     extract rRNA genes and transcripts from a gtf file
     """
-    rRNA_biotypes = ["rRNA", "Mt_rRNA", "tRNA", "MT_tRNA"]
+    rRNA_biotypes = ["rRNA", "Mt_rRNA", "tRNA", "Mt_tRNA"]
     db = get_gtf_db(gtf)
     biotype_lookup = _biotype_lookup_fn(gtf)
     features = []
